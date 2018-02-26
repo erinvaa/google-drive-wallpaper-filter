@@ -11,7 +11,6 @@ namespace _4kFilter
     {
         public static void ParseJpegResolutionFromHeader (Stream byteStream)
         {
-            //byte readByte = 0x00;
             int readByte = byteStream.ReadByte();
             while (readByte != -1)
             {
@@ -35,7 +34,7 @@ namespace _4kFilter
 
             if (readByte == -1)
             {
-                // TODO be unhappy; probably throw an error
+                // TODO be unhappy; probably throw an exception
                 return;
             }
 
@@ -47,6 +46,41 @@ namespace _4kFilter
             int width = byteStream.ReadByte() << 8;
             width += byteStream.ReadByte();
 
+            Console.WriteLine("Width: " + width + " Height: " + height);
+        }
+
+        public static void ParsePngResolutionFromHeader(Stream byteStream)
+        {
+            int readByte = byteStream.ReadByte();
+            char[] headerFlag = new char[] { 'I', 'H', 'D', 'R' };
+
+            // Read until image header
+            while (readByte != -1)
+            {
+                if (readByte == headerFlag[0])
+                {
+                    if (byteStream.ReadByte() == headerFlag[1] && 
+                        byteStream.ReadByte() == headerFlag[2] &&
+                        byteStream.ReadByte() == headerFlag[3])
+                    {
+                        break;
+                    } else
+                    {
+                        byteStream.Seek(-3, SeekOrigin.Current);
+                    }
+                }
+                readByte = byteStream.ReadByte();
+            }
+
+            if (readByte == -1)
+            {
+                // TODO be unhappy; probably throw an exception
+                return;
+            }
+
+            // Found correct header. Now skip ahead to height and width information.
+            int width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+            int height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
             Console.WriteLine("Width: " + width + " Height: " + height);
         }
     }

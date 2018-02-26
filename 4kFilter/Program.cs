@@ -22,12 +22,12 @@ namespace _4kFilter
 
         static void Main(string[] args)
         {
-            Console.WriteLine("Please enter a jpg path.");
+            Console.WriteLine("Please enter a png path.");
             string path = Console.ReadLine();
 
             FileStream fs = System.IO.File.OpenRead(path);
 
-            ImageHandler.ParseJpegResolutionFromHeader(fs);
+            ImageHandler.ParsePngResolutionFromHeader(fs);
 
             fs.Close();
             Console.ReadKey();
