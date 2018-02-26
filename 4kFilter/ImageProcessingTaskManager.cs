@@ -75,12 +75,8 @@ namespace _4kFilter
 
         public void AddAction(Action action)
         {
-            // DEBUG CODE !!!! REMOVE BEFORE WORKING VERSION
             imageProcessingActionsLock.AcquireWriterLock(1000);
-            if (imageProcessingActions.Count < 100)
-            {
-                imageProcessingActions.AddLast(action);
-            }
+            imageProcessingActions.AddLast(action);
             imageProcessingActionsLock.ReleaseWriterLock();
         }
 
@@ -93,38 +89,27 @@ namespace _4kFilter
             }
         }
 
-        // TODO make async (here?)
         private void Run()
         {
             RunningThreads++;
             bool running = true;
-            while (!HasActionsToRun)
-            {
-                if (StopWhenTasksCompleted)
-                {
-                    running = false;
-                    break;
-                }
-                else
-                {
-                    Thread.Sleep(WaitTime);
-                }
-            }
             while (running)
             {
                 imageProcessingActionsLock.AcquireWriterLock(1000);
-                Action currentTask = imageProcessingActions.First();
-                imageProcessingActions.RemoveFirst();
-                imageProcessingActionsLock.ReleaseWriterLock();
-
-                currentTask.Invoke();
-
-                while (!HasActionsToRun)
+                if (imageProcessingActions.Count > 0)
                 {
+                    Action currentTask = imageProcessingActions.First();
+                    imageProcessingActions.RemoveFirst();
+                    imageProcessingActionsLock.ReleaseWriterLock();
+
+                    currentTask.Invoke();
+                }
+                else
+                {
+                    imageProcessingActionsLock.ReleaseWriterLock();
                     if (StopWhenTasksCompleted)
                     {
                         running = false;
-                        break;
                     }
                     else
                     {

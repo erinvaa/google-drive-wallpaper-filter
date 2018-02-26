@@ -1,4 +1,5 @@
 ﻿using Google.Apis.Auth.OAuth2;
+using Google.Apis.Download;
 using Google.Apis.Drive.v3;
 using Google.Apis.Drive.v3.Data;
 using Google.Apis.Services;
@@ -18,8 +19,10 @@ namespace _4kFilter
         // If modifying these scopes, delete your previously saved credentials
         // at ~/.credentials/drive-dotnet-quickstart.json
         static string[] Scopes = { DriveService.Scope.Drive };
-        static string ApplicationName = "4K Filter";
+        static string ApplicationName = "Single 4K Image";
 
+        private static string wallaperFolderName = "Temp Test Folder";
+        private static string destinationFolderName = "Test 4k Folder";
 
         private static SemaphoreSlim runningTasks;
         private static ReaderWriterLock bigImageIdsLock = new ReaderWriterLock();
@@ -29,6 +32,7 @@ namespace _4kFilter
         private static int maxConcurrentThreads = 20;
         private static Random random = new Random();
         private static ImageProcessingTaskManager imageProcessingTaskManager;
+        private static int numberOfBytesToRead = 75;
 
 
         static void Main(string[] args)
@@ -80,7 +84,6 @@ namespace _4kFilter
             // Wait for all the logic to finish.
             resetEvent.WaitOne();
 
-
             lastImageAcquired = DateTime.Now;
             Console.WriteLine("Done scanning for files; starting to analyse images.");
             imageProcessingTaskManager.Start();
@@ -109,7 +112,7 @@ namespace _4kFilter
                     }
                     double imagesPerSecond = (double)(totalImages - imageProcessingTaskManager.ImageCount) / (DateTime.Now - lastImageAcquired).TotalSeconds;
                     Console.WriteLine(imageProcessingTaskManager.ImageCount + " images to process at a rate of " + 
-                        imagesPerSecond.ToString("#.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
+                        imagesPerSecond.ToString("0.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
                 }
                 else
                 {
@@ -129,7 +132,7 @@ namespace _4kFilter
             listRequest.PageToken = pageToken;
             listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension)";
 
-            // List files.
+            // List files
             FileList requestResult = null;
             int failureCount = 0;
             bool success = false;
@@ -149,7 +152,7 @@ namespace _4kFilter
                     Console.WriteLine("Sleeping for  " + waitTime + " milliseconds");
                     Thread.Sleep(waitTime);
                 }
-                catch (TaskCanceledException ex)
+                catch (TaskCanceledException)
                 {
                     // Note: I'm a little worried that there might be an issue with deadlocks here.
                     // If there are still problems, I should investigate that
@@ -191,21 +194,38 @@ namespace _4kFilter
 
         private static void AddFileIfBig(DriveService service, Google.Apis.Drive.v3.Data.File file)
         {
-            runningTasks.Wait();
-            MemoryStream stream = getFileHeader(service, file.Id);
-            bool isBigImage;
-            switch (file.FileExtension)
+            int failureCount = 0;
+            bool success = false;
+            bool isBigImage = false;
+            while (!success)
             {
-                case "png":
-                    isBigImage = ImageHandler.IsBigPngFromHeader(stream);
+                MemoryStream stream = getFileHeader(service, file.Id, failureCount);
+                if (stream.Length == 0)
+                {
+                    Console.WriteLine("Header not present in file.");
                     break;
-                case "jpeg":
-                case "jpg":
-                    isBigImage = ImageHandler.IsBigJpegFromHeader(stream);
-                    break;
-                default:
-                    isBigImage = false;
-                    break;
+                }
+                try
+                {
+                    switch (file.FileExtension)
+                    {
+                        case "png":
+                            isBigImage = ImageHandler.IsBigPngFromHeader(stream);
+                            break;
+                        case "jpeg":
+                        case "jpg":
+                            isBigImage = ImageHandler.IsBigJpegFromHeader(stream);
+                            break;
+                        default:
+                            isBigImage = false;
+                            break;
+                    }
+                    success = true;
+                } 
+                catch (ImageHandler.HeaderNotFoundException)
+                {
+                    failureCount++;
+                }
             }
 
             if (isBigImage)
@@ -214,15 +234,17 @@ namespace _4kFilter
                 bigImageIds.Add(file.Id);
                 bigImageIdsLock.ReleaseLock();
             }
-
-            runningTasks.Release();
         }
 
-        private static MemoryStream getFileHeader(DriveService service, string fileId)
+        private static MemoryStream getFileHeader(DriveService service, string fileId, int attemptNumber = 0)
         {
             var request = service.Files.Get(fileId);
             // TODO investigate using download async
             var stream = new MemoryStream();
+
+            long lowerByte = attemptNumber == 0 ? 0 : (long)numberOfBytesToRead * ((long)1 << (attemptNumber - 1));
+            // The 10 byte overlap between requests is so that the header isn't split between two requests.
+            long upperByte = (long)numberOfBytesToRead * ((long)1 << attemptNumber) + 10; 
 
             // TODO refactor this out (and combine with other version)
             int failureCount = 0;
@@ -231,7 +253,7 @@ namespace _4kFilter
             {
                 try
                 {
-                    request.DownloadRange(stream, new System.Net.Http.Headers.RangeHeaderValue(0, 75));
+                    request.DownloadRange(stream, new System.Net.Http.Headers.RangeHeaderValue(lowerByte, upperByte));
                     success = true;
                 }
                 catch (Google.GoogleApiException ex)
@@ -244,6 +266,8 @@ namespace _4kFilter
                     Thread.Sleep(waitTime);
                 }
             }
+
+            //Thread.Sleep(10000);
 
             return stream;
         }
@@ -259,7 +283,7 @@ namespace _4kFilter
         {
             FilesResource.ListRequest wallpaperFolderRequest = service.Files.List();
             wallpaperFolderRequest.Fields = "files(id)";
-            wallpaperFolderRequest.Q = "name = 'Wallpapers'";
+            wallpaperFolderRequest.Q = "name = '" + wallaperFolderName + "'";
             IList<Google.Apis.Drive.v3.Data.File> wallpaperFolderList = wallpaperFolderRequest.Execute()
                 .Files;
 

@@ -12,8 +12,13 @@ namespace _4kFilter
         static int minWidth = 3840;
         static int minHeight = 2160;
 
-        public static bool IsBigJpegFromHeader (Stream byteStream)
+        public class HeaderNotFoundException : Exception {
+            public HeaderNotFoundException(string msg) : base(msg) { }
+        }
+
+        public static bool IsBigJpegFromHeader(Stream byteStream)
         {
+            byteStream.Seek(0, SeekOrigin.Begin);
             int readByte = byteStream.ReadByte();
             while (readByte != -1)
             {
@@ -25,8 +30,7 @@ namespace _4kFilter
                         break;
                     } else if (readByte == 0xC2)
                     {
-                        // TODO - I want to do some logging or something here, as I want an example of a 
-                        // file that uses this type of header
+                        break;
                     } else
                     {
                         continue;
@@ -37,8 +41,7 @@ namespace _4kFilter
 
             if (readByte == -1)
             {
-                // TODO be unhappy; probably throw an exception
-                return false;
+                throw new HeaderNotFoundException("Got to end of file without finding header information");
             }
 
             // Found correct header. Now skip ahead to height and width information.
@@ -49,13 +52,19 @@ namespace _4kFilter
             int width = byteStream.ReadByte() << 8;
             width += byteStream.ReadByte();
 
-            Console.WriteLine("Width: " + width + " Height: " + height);
+            //Console.WriteLine("Width: " + width + " Height: " + height);
+
+            if (width % 10 != 0 || height % 10 != 0)
+            {
+                Console.WriteLine("Suspicious Results - Width: " + width + " Height: " + height);
+            }
 
             return width >= minWidth && height >= minHeight;
         }
 
         public static bool IsBigPngFromHeader(Stream byteStream)
         {
+            byteStream.Seek(0, SeekOrigin.Begin);
             int readByte = byteStream.ReadByte();
             char[] headerFlag = new char[] { 'I', 'H', 'D', 'R' };
 
@@ -69,7 +78,8 @@ namespace _4kFilter
                         byteStream.ReadByte() == headerFlag[3])
                     {
                         break;
-                    } else
+                    }
+                    else
                     {
                         byteStream.Seek(-3, SeekOrigin.Current);
                     }
@@ -79,15 +89,14 @@ namespace _4kFilter
 
             if (readByte == -1)
             {
-                // TODO be unhappy; probably throw an exception
-                return false;
+                throw new HeaderNotFoundException("Got to end of file without finding header information");
             }
 
             // Found correct header. Now skip ahead to height and width information.
             int width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
             int height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
 
-            Console.WriteLine("Width: " + width + " Height: " + height);
+            //Console.WriteLine("Width: " + width + " Height: " + height);
 
             return width >= minWidth && height >= minHeight;
         }
