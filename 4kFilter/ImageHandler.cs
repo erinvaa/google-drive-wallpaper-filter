@@ -12,7 +12,7 @@ namespace _4kFilter
         static int minWidth = 3840;
         static int minHeight = 2160;
 
-        public static void ParseJpegResolutionFromHeader (Stream byteStream)
+        public static bool IsBigJpegFromHeader (Stream byteStream)
         {
             int readByte = byteStream.ReadByte();
             while (readByte != -1)
@@ -38,7 +38,7 @@ namespace _4kFilter
             if (readByte == -1)
             {
                 // TODO be unhappy; probably throw an exception
-                return;
+                return false;
             }
 
             // Found correct header. Now skip ahead to height and width information.
@@ -50,9 +50,11 @@ namespace _4kFilter
             width += byteStream.ReadByte();
 
             Console.WriteLine("Width: " + width + " Height: " + height);
+
+            return width >= minWidth && height >= minHeight;
         }
 
-        public static void ParsePngResolutionFromHeader(Stream byteStream)
+        public static bool IsBigPngFromHeader(Stream byteStream)
         {
             int readByte = byteStream.ReadByte();
             char[] headerFlag = new char[] { 'I', 'H', 'D', 'R' };
@@ -78,13 +80,16 @@ namespace _4kFilter
             if (readByte == -1)
             {
                 // TODO be unhappy; probably throw an exception
-                return;
+                return false;
             }
 
             // Found correct header. Now skip ahead to height and width information.
             int width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
             int height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+
             Console.WriteLine("Width: " + width + " Height: " + height);
+
+            return width >= minWidth && height >= minHeight;
         }
     }
 }

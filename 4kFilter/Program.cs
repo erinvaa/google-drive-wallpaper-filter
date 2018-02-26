@@ -28,20 +28,11 @@ namespace _4kFilter
         private static int runningThreads = 0;
         private static int maxConcurrentThreads = 20;
         private static Random random = new Random();
+        private static ImageProcessingTaskManager imageProcessingTaskManager;
 
 
         static void Main(string[] args)
         {
-            //Console.WriteLine("Please enter a png path.");
-            //string path = Console.ReadLine();
-
-            //FileStream fs = System.IO.File.OpenRead(path);
-
-            //ImageHandler.ParsePngResolutionFromHeader(fs);
-
-            //fs.Close();
-            //Console.ReadKey();
-
             UserCredential credential;
 
             using (var stream =
@@ -74,16 +65,31 @@ namespace _4kFilter
             bigImageIdsLock.AcquireWriterLock(1000);
             bigImageIds = new HashSet<string>();
             bigImageIdsLock.ReleaseLock();
+            imageProcessingTaskManager = new ImageProcessingTaskManager();
 
             resetEvent = new ManualResetEvent(false);
-            runningTasks = new SemaphoreSlim(maxConcurrentThreads);
+            runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
+            imageProcessingTaskManager.Start();
 
             Task rootTask = new Task(() => FindNestedImagesAboveResolution(service, wallpaperIds[0]));
             runningThreads++;
             rootTask.Start();
 
+            Task loggerHelper = new Task(() =>
+            {
+                while (imageProcessingTaskManager.Running)
+                {
+                    Console.WriteLine(runningThreads + " threads queued and " + (maxConcurrentThreads - runningTasks.CurrentCount) + " running and " + imageProcessingTaskManager.ImageCount + " images to process");
+                    Thread.Sleep(500);
+                }
+            });
+            loggerHelper.Start();
+
             // Wait for all the logic to finish.
             resetEvent.WaitOne();
+            Console.WriteLine("Done main thread logic");
+            imageProcessingTaskManager.StopWhenTasksCompleted = true; // Tell the processor no new tasks are coming.
+            imageProcessingTaskManager.StoppedEvent.WaitOne();
 
             Console.WriteLine();
             Console.WriteLine();
@@ -95,7 +101,6 @@ namespace _4kFilter
         private static void FindNestedImagesAboveResolution(DriveService service, string parentId, string pageToken = null)
         {
             runningTasks.Wait();
-            Console.WriteLine("Started new thread; " + runningThreads + " threads queued and " + runningTasks.CurrentCount + " running");
             FilesResource.ListRequest listRequest = service.Files.List();
             listRequest.PageSize = 1000;
             listRequest.Q = "'" + parentId + "' in parents";
@@ -142,10 +147,7 @@ namespace _4kFilter
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
-                    // TODO just adding all pictures for now... still need to calculate if file is bigger than threshold.
-                    bigImageIdsLock.AcquireWriterLock(1000);
-                    bigImageIds.Add(file.Id);
-                    bigImageIdsLock.ReleaseLock();
+                    imageProcessingTaskManager.AddAction(() => AddFileIfBig(service, file));
                 }
             }
             runningTasks.Release();
@@ -153,6 +155,65 @@ namespace _4kFilter
             {
                 resetEvent.Set();
             }
+        }
+
+        private static void AddFileIfBig(DriveService service, Google.Apis.Drive.v3.Data.File file)
+        {
+            runningTasks.Wait();
+            MemoryStream stream = getFileHeader(service, file.Id);
+            bool isBigImage;
+            switch (file.FileExtension)
+            {
+                case "png":
+                    isBigImage = ImageHandler.IsBigPngFromHeader(stream);
+                    break;
+                case "jpeg":
+                case "jpg":
+                    isBigImage = ImageHandler.IsBigJpegFromHeader(stream);
+                    break;
+                default:
+                    isBigImage = false;
+                    break;
+            }
+
+            if (isBigImage)
+            {
+                bigImageIdsLock.AcquireWriterLock(1000);
+                bigImageIds.Add(file.Id);
+                bigImageIdsLock.ReleaseLock();
+            }
+
+            runningTasks.Release();
+        }
+
+        private static MemoryStream getFileHeader(DriveService service, string fileId)
+        {
+            var request = service.Files.Get(fileId);
+            // TODO investigate using download async
+            var stream = new MemoryStream();
+
+            // TODO refactor this out (and combine with other version)
+            int failureCount = 0;
+            bool success = false;
+            while (!success)
+            {
+                try
+                {
+                    request.DownloadRange(stream, new System.Net.Http.Headers.RangeHeaderValue(0, 75));
+                    success = true;
+                }
+                catch (Google.GoogleApiException ex)
+                {
+                    failureCount++;
+                    int waitTime = CalculateWaitTime(failureCount);
+                    Console.WriteLine("Exception: " + ex.Message);
+                    Console.WriteLine("This thread has failed " + failureCount + " times");
+                    Console.WriteLine("Sleeping for  " + waitTime + " milliseconds");
+                    Thread.Sleep(waitTime);
+                }
+            }
+
+            return stream;
         }
 
         private static int slotTime = 50;
