@@ -9,6 +9,9 @@ namespace _4kFilter
 {
     class ImageHandler
     {
+        static int minWidth = 3840;
+        static int minHeight = 2160;
+
         public static void ParseJpegResolutionFromHeader (Stream byteStream)
         {
             int readByte = byteStream.ReadByte();
