@@ -25,7 +25,7 @@ namespace _4kFilter
         private static ReaderWriterLock bigImageIdsLock = new ReaderWriterLock();
         private static ISet<string> bigImageIds;
         private static ManualResetEvent resetEvent;
-        private static int runningThreads = 0;
+        private static int queuedThreads = 0;
         private static int maxConcurrentThreads = 20;
         private static Random random = new Random();
         private static ImageProcessingTaskManager imageProcessingTaskManager;
@@ -61,7 +61,7 @@ namespace _4kFilter
             IList<string> wallpaperIds = FindWallpaperId(service);
 
 
-            // Get ready for the intense multithreading.
+            // Get ready for multithreading.
             bigImageIdsLock.AcquireWriterLock(1000);
             bigImageIds = new HashSet<string>();
             bigImageIdsLock.ReleaseLock();
@@ -69,27 +69,24 @@ namespace _4kFilter
 
             resetEvent = new ManualResetEvent(false);
             runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
-            imageProcessingTaskManager.Start();
 
             Task rootTask = new Task(() => FindNestedImagesAboveResolution(service, wallpaperIds[0]));
-            runningThreads++;
+            queuedThreads++;
             rootTask.Start();
 
-            Task loggerHelper = new Task(() =>
-            {
-                while (imageProcessingTaskManager.Running)
-                {
-                    Console.WriteLine(runningThreads + " threads queued and " + (maxConcurrentThreads - runningTasks.CurrentCount) + " running and " + imageProcessingTaskManager.ImageCount + " images to process");
-                    Thread.Sleep(500);
-                }
-            });
+            Task loggerHelper = new Task(AsyncLogger);
             loggerHelper.Start();
 
             // Wait for all the logic to finish.
             resetEvent.WaitOne();
-            Console.WriteLine("Done main thread logic");
+
+
+            lastImageAcquired = DateTime.Now;
+            Console.WriteLine("Done scanning for files; starting to analyse images.");
+            imageProcessingTaskManager.Start();
             imageProcessingTaskManager.StopWhenTasksCompleted = true; // Tell the processor no new tasks are coming.
             imageProcessingTaskManager.StoppedEvent.WaitOne();
+            loggerRunning = false;
 
             Console.WriteLine();
             Console.WriteLine();
@@ -97,6 +94,31 @@ namespace _4kFilter
             Console.ReadKey();
         }
 
+        private static DateTime lastImageAcquired = DateTime.MinValue;
+        private static bool loggerRunning = true;
+        private static void AsyncLogger()
+        {
+            int totalImages = -1;
+            while (loggerRunning)
+            {
+                if (lastImageAcquired != DateTime.MinValue)
+                {
+                    if (totalImages < 0)
+                    {
+                        totalImages = imageProcessingTaskManager.ImageCount;
+                    }
+                    double imagesPerSecond = (double)(totalImages - imageProcessingTaskManager.ImageCount) / (DateTime.Now - lastImageAcquired).TotalSeconds;
+                    Console.WriteLine(imageProcessingTaskManager.ImageCount + " images to process at a rate of " + 
+                        imagesPerSecond.ToString("#.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
+                }
+                else
+                {
+                    Console.WriteLine(queuedThreads + " threads queued and " + (maxConcurrentThreads - runningTasks.CurrentCount) + " running and " +
+                        imageProcessingTaskManager.ImageCount + " images to process");
+                }
+                Thread.Sleep(500);
+            }
+        }
 
         private static void FindNestedImagesAboveResolution(DriveService service, string parentId, string pageToken = null)
         {
@@ -127,13 +149,23 @@ namespace _4kFilter
                     Console.WriteLine("Sleeping for  " + waitTime + " milliseconds");
                     Thread.Sleep(waitTime);
                 }
+                catch (TaskCanceledException ex)
+                {
+                    // Note: I'm a little worried that there might be an issue with deadlocks here.
+                    // If there are still problems, I should investigate that
+                    Console.WriteLine("Task cancelled... trying again?");
+                    failureCount++;
+                    int waitTime = CalculateWaitTime(failureCount);
+                    Thread.Sleep(waitTime);
+
+                }
             }
             IList<Google.Apis.Drive.v3.Data.File> files = requestResult.Files;
 
             if (requestResult.NextPageToken != null)
             {
                 Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, requestResult.NextPageToken));
-                runningThreads++;
+                queuedThreads++;
                 nextPageTask.Start();
             }
 
@@ -142,7 +174,7 @@ namespace _4kFilter
                 if (file.MimeType == "application/vnd.google-apps.folder")
                 {
                     Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id));
-                    runningThreads++;
+                    queuedThreads++;
                     subDirectoryTask.Start();
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
@@ -151,7 +183,7 @@ namespace _4kFilter
                 }
             }
             runningTasks.Release();
-            if (--runningThreads == 0)
+            if (--queuedThreads == 0)
             {
                 resetEvent.Set();
             }

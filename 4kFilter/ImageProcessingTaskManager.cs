@@ -10,19 +10,44 @@ namespace _4kFilter
     // NOTE BE VERY CAREFUL EDITING THIS CLASS. THERE ARE A LOT OF THREADING THINGS THAT AREN'T ENFORCED, BUT ARE VERY IMPORTANT
     class ImageProcessingTaskManager
     {
+        private static int maxThreads = 10;
+
         private ReaderWriterLock imageProcessingActionsLock;
+        private ReaderWriterLock runningThreadsLock;
+        private int _runningThreads;
         // This is a queue and should be enforced inside this class
         private LinkedList<Action> imageProcessingActions;
+
 
         public ManualResetEvent StoppedEvent { get; private set; }
         public int WaitTime { get; set; }
         public bool StopWhenTasksCompleted { get; set; }
-        public bool Running { get; private set; }
+        public int RunningThreads {
+            get
+            {
+                runningThreadsLock.AcquireReaderLock(1000);
+                int retval = _runningThreads;
+                runningThreadsLock.ReleaseReaderLock();
+                return retval;
+            }
+            private set
+            {
+                runningThreadsLock.AcquireWriterLock(1000);
+                _runningThreads = value;
+                runningThreadsLock.ReleaseWriterLock();
+            }
+        }
+        public bool Running {
+            get
+            {
+                return RunningThreads > 0;
+            }
+        }
         public int ImageCount
         {
             get
             {
-                imageProcessingActionsLock.AcquireReaderLock(1000);
+                imageProcessingActionsLock.AcquireReaderLock(100);
                 int count = imageProcessingActions.Count;
                 imageProcessingActionsLock.ReleaseReaderLock();
                 return count;
@@ -39,9 +64,10 @@ namespace _4kFilter
 
         public ImageProcessingTaskManager()
         {
+            runningThreadsLock = new ReaderWriterLock();
             imageProcessingActionsLock = new ReaderWriterLock();
             imageProcessingActions = new LinkedList<Action>();
-            Running = false;
+            RunningThreads = 0;
             StopWhenTasksCompleted = false;
             WaitTime = 200;
             StoppedEvent = new ManualResetEvent(false);
@@ -49,43 +75,68 @@ namespace _4kFilter
 
         public void AddAction(Action action)
         {
+            // DEBUG CODE !!!! REMOVE BEFORE WORKING VERSION
             imageProcessingActionsLock.AcquireWriterLock(1000);
-            imageProcessingActions.AddLast(action);
+            if (imageProcessingActions.Count < 100)
+            {
+                imageProcessingActions.AddLast(action);
+            }
             imageProcessingActionsLock.ReleaseWriterLock();
         }
 
         public void Start()
         {
-            Task task = new Task(Run);
-            task.Start();
+            for (int i = 0; i < maxThreads; i++)
+            {
+                Task task = new Task(Run);
+                task.Start();
+            }
         }
 
         // TODO make async (here?)
         private void Run()
         {
-            Running = true;
-            while (Running)
+            RunningThreads++;
+            bool running = true;
+            while (!HasActionsToRun)
             {
-                while (!HasActionsToRun)
+                if (StopWhenTasksCompleted)
                 {
-                    if (StopWhenTasksCompleted)
-                    {
-                        Running = false;
-                    }
-                    else
-                    {
-                        Thread.Sleep(WaitTime);
-                    }
+                    running = false;
+                    break;
                 }
-
+                else
+                {
+                    Thread.Sleep(WaitTime);
+                }
+            }
+            while (running)
+            {
                 imageProcessingActionsLock.AcquireWriterLock(1000);
                 Action currentTask = imageProcessingActions.First();
                 imageProcessingActions.RemoveFirst();
                 imageProcessingActionsLock.ReleaseWriterLock();
 
                 currentTask.Invoke();
+
+                while (!HasActionsToRun)
+                {
+                    if (StopWhenTasksCompleted)
+                    {
+                        running = false;
+                        break;
+                    }
+                    else
+                    {
+                        Thread.Sleep(WaitTime);
+                    }
+                }
             }
-            StoppedEvent.Set();
+            RunningThreads--;
+            if (!Running)
+            {
+                StoppedEvent.Set();
+            }
         }
     }
 }
