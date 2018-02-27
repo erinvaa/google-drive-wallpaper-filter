@@ -19,9 +19,9 @@ namespace _4kFilter
         // If modifying these scopes, delete your previously saved credentials
         // at ~/.credentials/drive-dotnet-quickstart.json
         static string[] Scopes = { DriveService.Scope.Drive };
-        static string ApplicationName = "Single 4K Image";
+        static string ApplicationName = "4K Image Filter";
 
-        private static string wallaperFolderName = "Temp Test Folder";
+        private static string wallaperFolderName = "Wallpapers";
         private static string destinationFolderName = "Test 4k Folder";
 
         private static SemaphoreSlim runningTasks;

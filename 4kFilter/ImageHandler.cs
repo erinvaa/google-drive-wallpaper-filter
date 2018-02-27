@@ -59,9 +59,9 @@ namespace _4kFilter
 
             //Console.WriteLine("Width: " + width + " Height: " + height);
 
-            if (width % 10 != 0 || height % 10 != 0 || width < 0 || height < 0)
+            if (width < 0 || height < 0)
             {
-                Console.WriteLine("Suspicious Results - Width: " + width + " Height: " + height + " Flag:" + readByte.ToString("X"));
+                Console.WriteLine("Bad negative value found - Width: " + width + " Height: " + height + " Flag:" + readByte.ToString("X"));
             }
 
             return width >= minWidth && height >= minHeight;
@@ -78,8 +78,8 @@ namespace _4kFilter
             {
                 if (readByte == headerFlag[0])
                 {
-                    if (byteStream.ReadByte() == headerFlag[1] && 
-                        byteStream.ReadByte() == headerFlag[2] &&
+                    if (byteStream.ReadByte() == headerFlag[1] & 
+                        byteStream.ReadByte() == headerFlag[2] &
                         byteStream.ReadByte() == headerFlag[3])
                     {
                         break;
