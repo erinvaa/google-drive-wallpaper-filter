@@ -41,7 +41,7 @@ namespace _4kFilter
 
             if (readByte == -1)
             {
-                throw new HeaderNotFoundException("Got to end of file without finding header information");
+                throw new HeaderNotFoundException("Got to end of stream without finding header information");
             }
 
             // Found correct header. Now skip ahead to height and width information.
@@ -52,11 +52,16 @@ namespace _4kFilter
             int width = byteStream.ReadByte() << 8;
             width += byteStream.ReadByte();
 
+            if (byteStream.ReadByte() == -1)
+            {
+                throw new HeaderNotFoundException("Header only partially present in stream.");
+            }
+
             //Console.WriteLine("Width: " + width + " Height: " + height);
 
-            if (width % 10 != 0 || height % 10 != 0)
+            if (width % 10 != 0 || height % 10 != 0 || width < 0 || height < 0)
             {
-                Console.WriteLine("Suspicious Results - Width: " + width + " Height: " + height);
+                Console.WriteLine("Suspicious Results - Width: " + width + " Height: " + height + " Flag:" + readByte.ToString("X"));
             }
 
             return width >= minWidth && height >= minHeight;

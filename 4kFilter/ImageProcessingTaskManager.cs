@@ -82,6 +82,7 @@ namespace _4kFilter
 
         public void Start()
         {
+            StoppedEvent.Reset();
             for (int i = 0; i < maxThreads; i++)
             {
                 Task task = new Task(Run);

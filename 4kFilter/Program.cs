@@ -62,7 +62,7 @@ namespace _4kFilter
                 ApplicationName = ApplicationName,
             });
 
-            IList<string> wallpaperIds = FindWallpaperId(service);
+            IList<string> wallpaperIds = FindWallpaperIds(service);
 
 
             // Get ready for multithreading.
@@ -94,6 +94,25 @@ namespace _4kFilter
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine("Size: " + bigImageIds.Count);
+
+            string newParentId = FindDestinationId(service)[0];
+
+            // There SHOULDN'T be anything else using this lock by now... but may as well be safe about it.
+            bigImageIdsLock.AcquireWriterLock(1000);
+            // We'll try to be smarter about this later... for now just seeing if it works
+            foreach (var fileId in bigImageIds)
+            {
+                var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), fileId);
+                //updateRequest.Fields = "id, parents";
+                updateRequest.AddParents = newParentId;
+                // TODO collect these up into batches and send a batch request instead.
+                updateRequest.Execute();
+            }
+            bigImageIdsLock.ReleaseWriterLock();
+
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine("Done moving files into new folder");
             Console.ReadKey();
         }
 
@@ -111,7 +130,7 @@ namespace _4kFilter
                         totalImages = imageProcessingTaskManager.ImageCount;
                     }
                     double imagesPerSecond = (double)(totalImages - imageProcessingTaskManager.ImageCount) / (DateTime.Now - lastImageAcquired).TotalSeconds;
-                    Console.WriteLine(imageProcessingTaskManager.ImageCount + " images to process at a rate of " + 
+                    Console.WriteLine(imageProcessingTaskManager.ImageCount + " images to process at a rate of " +
                         imagesPerSecond.ToString("0.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
                 }
                 else
@@ -221,7 +240,7 @@ namespace _4kFilter
                             break;
                     }
                     success = true;
-                } 
+                }
                 catch (ImageHandler.HeaderNotFoundException)
                 {
                     failureCount++;
@@ -244,7 +263,7 @@ namespace _4kFilter
 
             long lowerByte = attemptNumber == 0 ? 0 : (long)numberOfBytesToRead * ((long)1 << (attemptNumber - 1));
             // The 10 byte overlap between requests is so that the header isn't split between two requests.
-            long upperByte = (long)numberOfBytesToRead * ((long)1 << attemptNumber) + 10; 
+            long upperByte = (long)numberOfBytesToRead * ((long)1 << attemptNumber) + 10;
 
             // TODO refactor this out (and combine with other version)
             int failureCount = 0;
@@ -279,7 +298,7 @@ namespace _4kFilter
             return (int)random.Next(1 << failureCount) * slotTime;
         }
 
-        private static IList<string> FindWallpaperId(DriveService service)
+        private static IList<string> FindWallpaperIds(DriveService service)
         {
             FilesResource.ListRequest wallpaperFolderRequest = service.Files.List();
             wallpaperFolderRequest.Fields = "files(id)";
@@ -295,5 +314,22 @@ namespace _4kFilter
 
             return ids;
         }
+        private static IList<string> FindDestinationId(DriveService service)
+        {
+            FilesResource.ListRequest wallpaperFolderRequest = service.Files.List();
+            wallpaperFolderRequest.Fields = "files(id)";
+            wallpaperFolderRequest.Q = "name = '" + destinationFolderName + "'";
+            IList<Google.Apis.Drive.v3.Data.File> destinationFolderList = wallpaperFolderRequest.Execute()
+                .Files;
+
+            IList<string> ids = new List<string>();
+            foreach (var file in destinationFolderList)
+            {
+                ids.Add(file.Id);
+            }
+
+            return ids;
+        }
+
     }
 }
