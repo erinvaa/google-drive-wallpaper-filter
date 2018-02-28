@@ -77,6 +77,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Dimensions.cs" />
     <Compile Include="ImageHandler.cs" />
     <Compile Include="ImageProcessingTaskManager.cs" />
     <Compile Include="Program.cs" />

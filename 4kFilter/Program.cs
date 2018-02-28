@@ -21,12 +21,15 @@ namespace _4kFilter
         static string[] Scopes = { DriveService.Scope.Drive };
         static string ApplicationName = "4K Image Filter";
 
-        private static string wallaperFolderName = "Wallpapers";
-        private static string destinationFolderName = "Test 4k Folder";
+        private static string wallpaperFolderName = "Wallpapers";
+        private static string destination4kFolderName = "Resolution: 4K";
+        private static string destinationHdFolderName = "Resolution: HD";
+        private static string destinationWqhdFolderName = "Resolution: WQHD";
+
 
         private static SemaphoreSlim runningTasks;
-        private static ReaderWriterLock bigImageIdsLock = new ReaderWriterLock();
-        private static ISet<string> bigImageIds;
+        private static ReaderWriterLock imageInformationLock = new ReaderWriterLock();
+        private static ISet<ImageInformation> imageInformation;
         private static ManualResetEvent resetEvent;
         private static int queuedThreads = 0;
         private static int maxConcurrentThreads = 20;
@@ -34,6 +37,62 @@ namespace _4kFilter
         private static ImageProcessingTaskManager imageProcessingTaskManager;
         private static int numberOfBytesToRead = 75;
 
+        private static Dictionary<byte, Dimensions> dimensionsMap;
+        private static Dictionary<byte, string> folderIdMap;
+
+        class ImageInformation
+        {
+            public string Id { get; set; }
+            public string Name { get; set; }
+
+            public List<byte> MatchingResolutions { get; set; }
+
+            public ImageInformation()
+            {
+                MatchingResolutions = new List<byte>();
+            }
+
+            public override bool Equals(object obj)
+            {
+                var information = obj as ImageInformation;
+                return information != null &&
+                       Id == information.Id;
+            }
+
+            public override int GetHashCode()
+            {
+                return 2108858624 + EqualityComparer<string>.Default.GetHashCode(Id);
+            }
+        }
+
+        class ImageInformationEqualityComparer : EqualityComparer<ImageInformation>
+        {
+            public override bool Equals(ImageInformation x, ImageInformation y)
+            {
+                return x.Id == y.Id;
+            }
+
+            public override int GetHashCode(ImageInformation obj)
+            {
+                return 2108858624 + EqualityComparer<string>.Default.GetHashCode(obj.Id);
+            }
+        }
+
+        // This is writen so it should be possible to replace with user input (with some work)
+        private static void PopulateDimenionInformation(DriveService service)
+        {
+            dimensionsMap = new Dictionary<byte, Dimensions>();
+            folderIdMap = new Dictionary<byte, string>();
+
+            dimensionsMap.Add(0, new Dimensions(3840, 2160));
+            folderIdMap.Add(0, FindFileWithName(service, destination4kFolderName));
+
+            dimensionsMap.Add(1, new Dimensions(2560, 1440));
+            folderIdMap.Add(1, FindFileWithName(service, destinationWqhdFolderName));
+
+            dimensionsMap.Add(2, new Dimensions(1920, 1200));
+            folderIdMap.Add(2, FindFileWithName(service, destinationHdFolderName));
+        }
 
         static void Main(string[] args)
         {
@@ -62,19 +121,21 @@ namespace _4kFilter
                 ApplicationName = ApplicationName,
             });
 
-            IList<string> wallpaperIds = FindWallpaperIds(service);
+            PopulateDimenionInformation(service);
 
+
+            string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
             // Get ready for multithreading.
-            bigImageIdsLock.AcquireWriterLock(1000);
-            bigImageIds = new HashSet<string>();
-            bigImageIdsLock.ReleaseLock();
+            imageInformationLock.AcquireWriterLock(1000);
+            imageInformation = new HashSet<ImageInformation>(new ImageInformationEqualityComparer());
+            imageInformationLock.ReleaseLock();
             imageProcessingTaskManager = new ImageProcessingTaskManager();
 
             resetEvent = new ManualResetEvent(false);
             runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
 
-            Task rootTask = new Task(() => FindNestedImagesAboveResolution(service, wallpaperIds[0]));
+            Task rootTask = new Task(() => FindNestedImagesAboveResolution(service, wallpaperId));
             queuedThreads++;
             rootTask.Start();
 
@@ -92,23 +153,30 @@ namespace _4kFilter
             loggerRunning = false;
 
             Console.WriteLine();
+            Console.WriteLine("Size: " + imageInformation.Count);
             Console.WriteLine();
-            Console.WriteLine("Size: " + bigImageIds.Count);
-
-            string newParentId = FindDestinationId(service)[0];
 
             // There SHOULDN'T be anything else using this lock by now... but may as well be safe about it.
-            bigImageIdsLock.AcquireWriterLock(1000);
+            imageInformationLock.AcquireReaderLock(1000);
             // We'll try to be smarter about this later... for now just seeing if it works
-            foreach (var fileId in bigImageIds)
+            foreach (var information in imageInformation)
             {
-                var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), fileId);
+                var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), information.Id);
                 //updateRequest.Fields = "id, parents";
-                updateRequest.AddParents = newParentId;
+                List<string> newParents = new List<string>();
+                foreach (var i in information.MatchingResolutions)
+                {
+                    string parentId = folderIdMap[i];
+                    newParents.Add(parentId);
+                }
+                updateRequest.AddParents = String.Join(",", newParents);
+                imagesMoved++;
                 // TODO collect these up into batches and send a batch request instead.
-                updateRequest.Execute();
+                updateRequest.ExecuteAsync();
             }
-            bigImageIdsLock.ReleaseWriterLock();
+            imageInformationLock.ReleaseReaderLock();
+
+            loggerRunning = false;
 
             Console.WriteLine();
             Console.WriteLine();
@@ -118,12 +186,24 @@ namespace _4kFilter
 
         private static DateTime lastImageAcquired = DateTime.MinValue;
         private static bool loggerRunning = true;
+        private static int imagesMoved = 0;
         private static void AsyncLogger()
         {
             int totalImages = -1;
+            int totalFoundImages = -1;
             while (loggerRunning)
             {
-                if (lastImageAcquired != DateTime.MinValue)
+                if (imagesMoved > 0)
+                {
+                    if (totalFoundImages < 0)
+                    {
+                        imageInformationLock.AcquireReaderLock(1000);
+                        totalFoundImages = imageInformation.Count;
+                        imageInformationLock.ReleaseReaderLock();
+                    }
+                    Console.WriteLine("Moved " + imagesMoved + "/" + totalFoundImages + " images.");
+                }
+                else if (lastImageAcquired != DateTime.MinValue)
                 {
                     if (totalImages < 0)
                     {
@@ -201,7 +281,7 @@ namespace _4kFilter
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
-                    imageProcessingTaskManager.AddAction(() => AddFileIfBig(service, file));
+                    imageProcessingTaskManager.AddAction(() => CategorizeImage(service, file));
                 }
             }
             runningTasks.Release();
@@ -211,11 +291,11 @@ namespace _4kFilter
             }
         }
 
-        private static void AddFileIfBig(DriveService service, Google.Apis.Drive.v3.Data.File file)
+        private static void CategorizeImage(DriveService service, Google.Apis.Drive.v3.Data.File file)
         {
             int failureCount = 0;
             bool success = false;
-            bool isBigImage = false;
+            Dimensions dimensions = Dimensions.None;
             while (!success)
             {
                 MemoryStream stream = getFileHeader(service, file.Id, failureCount);
@@ -229,14 +309,13 @@ namespace _4kFilter
                     switch (file.FileExtension)
                     {
                         case "png":
-                            isBigImage = ImageHandler.IsBigPngFromHeader(stream);
+                            dimensions = ImageHandler.ReadPngDimensions(stream);
                             break;
                         case "jpeg":
                         case "jpg":
-                            isBigImage = ImageHandler.IsBigJpegFromHeader(stream);
+                            dimensions = ImageHandler.ReadJpgDimensions(stream);
                             break;
                         default:
-                            isBigImage = false;
                             break;
                     }
                     success = true;
@@ -247,11 +326,25 @@ namespace _4kFilter
                 }
             }
 
-            if (isBigImage)
+            if (dimensions != Dimensions.None)
             {
-                bigImageIdsLock.AcquireWriterLock(1000);
-                bigImageIds.Add(file.Id);
-                bigImageIdsLock.ReleaseLock();
+                ImageInformation information = new ImageInformation
+                {
+                    Id = file.Id,
+                    Name = file.Name
+                };
+
+                foreach (KeyValuePair<byte, Dimensions> entry in dimensionsMap)
+                {
+                    if (dimensions >= entry.Value)
+                    {
+                        information.MatchingResolutions.Add(entry.Key);
+                    }
+                }
+
+                imageInformationLock.AcquireWriterLock(1000);
+                imageInformation.Add(information);
+                imageInformationLock.ReleaseLock();
             }
         }
 
@@ -298,38 +391,15 @@ namespace _4kFilter
             return (int)random.Next(1 << failureCount) * slotTime;
         }
 
-        private static IList<string> FindWallpaperIds(DriveService service)
+        private static string FindFileWithName(DriveService service, string filename)
         {
-            FilesResource.ListRequest wallpaperFolderRequest = service.Files.List();
-            wallpaperFolderRequest.Fields = "files(id)";
-            wallpaperFolderRequest.Q = "name = '" + wallaperFolderName + "'";
-            IList<Google.Apis.Drive.v3.Data.File> wallpaperFolderList = wallpaperFolderRequest.Execute()
+            FilesResource.ListRequest findFilenameRequest = service.Files.List();
+            findFilenameRequest.Fields = "files(id)";
+            findFilenameRequest.Q = "name = '" + filename + "'";
+            IList<Google.Apis.Drive.v3.Data.File> filesList = findFilenameRequest.Execute()
                 .Files;
 
-            IList<string> ids = new List<string>();
-            foreach (var file in wallpaperFolderList)
-            {
-                ids.Add(file.Id);
-            }
-
-            return ids;
+            return filesList[0].Id;
         }
-        private static IList<string> FindDestinationId(DriveService service)
-        {
-            FilesResource.ListRequest wallpaperFolderRequest = service.Files.List();
-            wallpaperFolderRequest.Fields = "files(id)";
-            wallpaperFolderRequest.Q = "name = '" + destinationFolderName + "'";
-            IList<Google.Apis.Drive.v3.Data.File> destinationFolderList = wallpaperFolderRequest.Execute()
-                .Files;
-
-            IList<string> ids = new List<string>();
-            foreach (var file in destinationFolderList)
-            {
-                ids.Add(file.Id);
-            }
-
-            return ids;
-        }
-
     }
 }

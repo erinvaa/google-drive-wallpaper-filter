@@ -7,16 +7,13 @@ using System.Threading.Tasks;
 
 namespace _4kFilter
 {
-    class ImageHandler
+    partial class ImageHandler
     {
-        static int minWidth = 3840;
-        static int minHeight = 2160;
-
         public class HeaderNotFoundException : Exception {
             public HeaderNotFoundException(string msg) : base(msg) { }
         }
 
-        public static bool IsBigJpegFromHeader(Stream byteStream)
+        public static Dimensions ReadJpgDimensions(Stream byteStream)
         {
             byteStream.Seek(0, SeekOrigin.Begin);
             int readByte = byteStream.ReadByte();
@@ -28,10 +25,12 @@ namespace _4kFilter
                     if (readByte == 0xC0)
                     {
                         break;
-                    } else if (readByte == 0xC2)
+                    }
+                    else if (readByte == 0xC2)
                     {
                         break;
-                    } else
+                    }
+                    else
                     {
                         continue;
                     }
@@ -47,10 +46,12 @@ namespace _4kFilter
             // Found correct header. Now skip ahead to height and width information.
             byteStream.Seek(3, SeekOrigin.Current);
 
-            int height = byteStream.ReadByte() << 8;
-            height += byteStream.ReadByte();
-            int width = byteStream.ReadByte() << 8;
-            width += byteStream.ReadByte();
+            Dimensions dimensions = new Dimensions();
+
+            dimensions.height = byteStream.ReadByte() << 8;
+            dimensions.height += byteStream.ReadByte();
+            dimensions.width = byteStream.ReadByte() << 8;
+            dimensions.width += byteStream.ReadByte();
 
             if (byteStream.ReadByte() == -1)
             {
@@ -59,15 +60,16 @@ namespace _4kFilter
 
             //Console.WriteLine("Width: " + width + " Height: " + height);
 
-            if (width < 0 || height < 0)
+            if (dimensions.width < 0 || dimensions.height < 0)
             {
-                Console.WriteLine("Bad negative value found - Width: " + width + " Height: " + height + " Flag:" + readByte.ToString("X"));
+                Console.WriteLine("Bad negative value found - Width: " + dimensions.width + " Height: " + 
+                    dimensions.height + " Flag:" + readByte.ToString("X"));
             }
 
-            return width >= minWidth && height >= minHeight;
+            return dimensions;
         }
 
-        public static bool IsBigPngFromHeader(Stream byteStream)
+        public static Dimensions ReadPngDimensions(Stream byteStream)
         {
             byteStream.Seek(0, SeekOrigin.Begin);
             int readByte = byteStream.ReadByte();
@@ -78,15 +80,22 @@ namespace _4kFilter
             {
                 if (readByte == headerFlag[0])
                 {
-                    if (byteStream.ReadByte() == headerFlag[1] & 
-                        byteStream.ReadByte() == headerFlag[2] &
-                        byteStream.ReadByte() == headerFlag[3])
+                    byte[] nextThreeByte = new byte[3];
+                    int bytesRead = byteStream.Read(nextThreeByte, 0, 3);
+                    if (bytesRead < 3)
+                    {
+                        throw new HeaderNotFoundException("Got to end of file without finding header information");
+                    }
+                    if (nextThreeByte[0] == headerFlag[1] &&
+                        nextThreeByte[1] == headerFlag[2] &&
+                        nextThreeByte[2] == headerFlag[3])
                     {
                         break;
                     }
                     else
                     {
                         byteStream.Seek(-3, SeekOrigin.Current);
+                        
                     }
                 }
                 readByte = byteStream.ReadByte();
@@ -98,12 +107,17 @@ namespace _4kFilter
             }
 
             // Found correct header. Now skip ahead to height and width information.
-            int width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
-            int height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+            Dimensions dimensions = new Dimensions();
 
-            //Console.WriteLine("Width: " + width + " Height: " + height);
+            dimensions.width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+            dimensions.height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
 
-            return width >= minWidth && height >= minHeight;
+            if (dimensions.width < 0 || dimensions.height < 0)
+            {
+                Console.WriteLine("Bad negative value found - Width: " + dimensions.width + " Height: " + dimensions.height);
+            }
+
+            return dimensions;
         }
     }
 }
