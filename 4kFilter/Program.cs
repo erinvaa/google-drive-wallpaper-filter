@@ -1,5 +1,4 @@
 ﻿using Google.Apis.Auth.OAuth2;
-using Google.Apis.Download;
 using Google.Apis.Drive.v3;
 using Google.Apis.Drive.v3.Data;
 using Google.Apis.Services;
@@ -7,8 +6,6 @@ using Google.Apis.Util.Store;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,8 +25,8 @@ namespace _4kFilter
 
 
         private static SemaphoreSlim runningTasks;
-        private static ReaderWriterLock imageInformationLock = new ReaderWriterLock();
-        private static ISet<ImageInformation> imageInformation;
+        private static ReaderWriterLock foundImagesLock = new ReaderWriterLock();
+        private static ISet<string> foundImages;
         private static ManualResetEvent resetEvent;
         private static int queuedThreads = 0;
         private static int maxConcurrentThreads = 20;
@@ -39,44 +36,6 @@ namespace _4kFilter
 
         private static Dictionary<byte, Dimensions> dimensionsMap;
         private static Dictionary<byte, string> folderIdMap;
-
-        class ImageInformation
-        {
-            public string Id { get; set; }
-            public string Name { get; set; }
-
-            public List<byte> MatchingResolutions { get; set; }
-
-            public ImageInformation()
-            {
-                MatchingResolutions = new List<byte>();
-            }
-
-            public override bool Equals(object obj)
-            {
-                var information = obj as ImageInformation;
-                return information != null &&
-                       Id == information.Id;
-            }
-
-            public override int GetHashCode()
-            {
-                return 2108858624 + EqualityComparer<string>.Default.GetHashCode(Id);
-            }
-        }
-
-        class ImageInformationEqualityComparer : EqualityComparer<ImageInformation>
-        {
-            public override bool Equals(ImageInformation x, ImageInformation y)
-            {
-                return x.Id == y.Id;
-            }
-
-            public override int GetHashCode(ImageInformation obj)
-            {
-                return 2108858624 + EqualityComparer<string>.Default.GetHashCode(obj.Id);
-            }
-        }
 
         // This is writen so it should be possible to replace with user input (with some work)
         private static void PopulateDimenionInformation(DriveService service)
@@ -127,9 +86,9 @@ namespace _4kFilter
             string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
             // Get ready for multithreading.
-            imageInformationLock.AcquireWriterLock(1000);
-            imageInformation = new HashSet<ImageInformation>(new ImageInformationEqualityComparer());
-            imageInformationLock.ReleaseLock();
+            foundImagesLock.AcquireWriterLock(1000);
+            foundImages = new HashSet<string>();
+            foundImagesLock.ReleaseLock();
             imageProcessingTaskManager = new ImageProcessingTaskManager();
 
             resetEvent = new ManualResetEvent(false);
@@ -153,57 +112,18 @@ namespace _4kFilter
             loggerRunning = false;
 
             Console.WriteLine();
-            Console.WriteLine("Size: " + imageInformation.Count);
-            Console.WriteLine();
-
-            // There SHOULDN'T be anything else using this lock by now... but may as well be safe about it.
-            imageInformationLock.AcquireReaderLock(1000);
-            // We'll try to be smarter about this later... for now just seeing if it works
-            foreach (var information in imageInformation)
-            {
-                var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), information.Id);
-                //updateRequest.Fields = "id, parents";
-                List<string> newParents = new List<string>();
-                foreach (var i in information.MatchingResolutions)
-                {
-                    string parentId = folderIdMap[i];
-                    newParents.Add(parentId);
-                }
-                updateRequest.AddParents = String.Join(",", newParents);
-                imagesMoved++;
-                // TODO collect these up into batches and send a batch request instead.
-                updateRequest.ExecuteAsync();
-            }
-            imageInformationLock.ReleaseReaderLock();
-
-            loggerRunning = false;
-
-            Console.WriteLine();
-            Console.WriteLine();
             Console.WriteLine("Done moving files into new folder");
             Console.ReadKey();
         }
 
         private static DateTime lastImageAcquired = DateTime.MinValue;
         private static bool loggerRunning = true;
-        private static int imagesMoved = 0;
         private static void AsyncLogger()
         {
             int totalImages = -1;
-            int totalFoundImages = -1;
             while (loggerRunning)
             {
-                if (imagesMoved > 0)
-                {
-                    if (totalFoundImages < 0)
-                    {
-                        imageInformationLock.AcquireReaderLock(1000);
-                        totalFoundImages = imageInformation.Count;
-                        imageInformationLock.ReleaseReaderLock();
-                    }
-                    Console.WriteLine("Moved " + imagesMoved + "/" + totalFoundImages + " images.");
-                }
-                else if (lastImageAcquired != DateTime.MinValue)
+                if (lastImageAcquired != DateTime.MinValue)
                 {
                     if (totalImages < 0)
                     {
@@ -229,17 +149,76 @@ namespace _4kFilter
             listRequest.PageSize = 1000;
             listRequest.Q = "'" + parentId + "' in parents";
             listRequest.PageToken = pageToken;
-            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension)";
+            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, parents)";
 
             // List files
-            FileList requestResult = null;
+            FileList requestResult = ExecuteUntilSuccessful(listRequest);
+            IList<Google.Apis.Drive.v3.Data.File> files = requestResult.Files;
+
+            if (requestResult.NextPageToken != null)
+            {
+                Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, requestResult.NextPageToken));
+                queuedThreads++;
+                nextPageTask.Start();
+            }
+
+            foreach (var file in files)
+            {
+                if (file.MimeType == "application/vnd.google-apps.folder")
+                {
+                    Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id));
+                    queuedThreads++;
+                    subDirectoryTask.Start();
+                }
+                else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
+                {
+                    // First check if this file is already sorted into the relevant directory.
+                    //bool alreadyProcessed = false;
+                    //foreach (var entry in folderIdMap)
+                    //{
+                    //    if (file.Parents.Contains(entry.Value)) {
+                    //        alreadyProcessed = true;
+                    //        break;
+                    //    }
+                    //}
+                    //if (alreadyProcessed)
+                    //{
+                    //    continue;
+                    //}
+
+                    // Add to queue if it's not already added
+                    foundImagesLock.AcquireWriterLock(1000);
+                    if (!foundImages.Contains(file.Id))
+                    {
+                        foundImages.Add(file.Id);
+                        foundImagesLock.ReleaseWriterLock();
+
+                        imageProcessingTaskManager.AddAction(() => CategorizeImage(service, file));
+
+                    }
+                    else
+                    {
+                        foundImagesLock.ReleaseWriterLock();
+                    }
+                }
+            }
+            runningTasks.Release();
+            if (--queuedThreads == 0)
+            {
+                resetEvent.Set();
+            }
+        }
+
+        private static T ExecuteUntilSuccessful<T>(DriveBaseServiceRequest<T> request)
+        {
+            T results = default(T);
             int failureCount = 0;
             bool success = false;
             while (!success)
             {
                 try
                 {
-                    requestResult = listRequest.Execute();
+                    results = request.Execute();
                     success = true;
                 }
                 catch (Google.GoogleApiException ex)
@@ -262,33 +241,8 @@ namespace _4kFilter
 
                 }
             }
-            IList<Google.Apis.Drive.v3.Data.File> files = requestResult.Files;
 
-            if (requestResult.NextPageToken != null)
-            {
-                Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, requestResult.NextPageToken));
-                queuedThreads++;
-                nextPageTask.Start();
-            }
-
-            foreach (var file in files)
-            {
-                if (file.MimeType == "application/vnd.google-apps.folder")
-                {
-                    Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id));
-                    queuedThreads++;
-                    subDirectoryTask.Start();
-                }
-                else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
-                {
-                    imageProcessingTaskManager.AddAction(() => CategorizeImage(service, file));
-                }
-            }
-            runningTasks.Release();
-            if (--queuedThreads == 0)
-            {
-                resetEvent.Set();
-            }
+            return results;
         }
 
         private static void CategorizeImage(DriveService service, Google.Apis.Drive.v3.Data.File file)
@@ -328,24 +282,33 @@ namespace _4kFilter
 
             if (dimensions != Dimensions.None)
             {
-                ImageInformation information = new ImageInformation
-                {
-                    Id = file.Id,
-                    Name = file.Name
-                };
+                List<byte> matchingResolutions = new List<byte>();
 
                 foreach (KeyValuePair<byte, Dimensions> entry in dimensionsMap)
                 {
                     if (dimensions >= entry.Value)
                     {
-                        information.MatchingResolutions.Add(entry.Key);
+                        matchingResolutions.Add(entry.Key);
                     }
                 }
 
-                imageInformationLock.AcquireWriterLock(1000);
-                imageInformation.Add(information);
-                imageInformationLock.ReleaseLock();
+                var request = GetRequestToAddDirectories(service, file.Id, matchingResolutions);
+
+                ExecuteUntilSuccessful(request);
             }
+        }
+
+        private static FilesResource.UpdateRequest GetRequestToAddDirectories(DriveService service, string id, List<byte> resolutions)
+        {
+            var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), id);
+            List<string> newParents = new List<string>();
+            foreach (var i in resolutions)
+            {
+                string parentId = folderIdMap[i];
+                newParents.Add(parentId);
+            }
+            updateRequest.AddParents = String.Join(",", newParents);
+            return updateRequest;
         }
 
         private static MemoryStream getFileHeader(DriveService service, string fileId, int attemptNumber = 0)
@@ -377,9 +340,17 @@ namespace _4kFilter
                     Console.WriteLine("Sleeping for  " + waitTime + " milliseconds");
                     Thread.Sleep(waitTime);
                 }
-            }
+                catch (TaskCanceledException)
+                {
+                    // Note: I'm a little worried that there might be an issue with deadlocks here.
+                    // If there are still problems, I should investigate that
+                    Console.WriteLine("Task cancelled... trying again?");
+                    failureCount++;
+                    int waitTime = CalculateWaitTime(failureCount);
+                    Thread.Sleep(waitTime);
 
-            //Thread.Sleep(10000);
+                }
+            }
 
             return stream;
         }
