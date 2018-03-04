@@ -18,7 +18,8 @@ namespace _4kFilter
         static string[] Scopes = { DriveService.Scope.Drive };
         static string ApplicationName = "4K Image Filter";
 
-        private static string wallpaperFolderName = "Wallpapers";
+        //private static string wallpaperFolderName = "Wallpapers";
+        private static string wallpaperFolderName = "Resolution: 4K";
         private static string destination4kFolderName = "Resolution: 4K";
         private static string destinationHdFolderName = "Resolution: HD";
         private static string destinationWqhdFolderName = "Resolution: WQHD";
@@ -322,7 +323,8 @@ namespace _4kFilter
             long upperByte = (long)numberOfBytesToRead * ((long)1 << attemptNumber) + 10;
 
             // TODO refactor this out (and combine with other version)
-            int failureCount = 0;
+            int missedHeaderFailureCount = 0;
+            int taskCancelledFailtureCount = 0;
             bool success = false;
             while (!success)
             {
@@ -333,20 +335,20 @@ namespace _4kFilter
                 }
                 catch (Google.GoogleApiException ex)
                 {
-                    failureCount++;
-                    int waitTime = CalculateWaitTime(failureCount);
+                    missedHeaderFailureCount++;
+                    int waitTime = CalculateWaitTime(missedHeaderFailureCount);
                     Console.WriteLine("Exception: " + ex.Message);
-                    Console.WriteLine("This thread has failed " + failureCount + " times");
+                    Console.WriteLine("This thread has failed " + missedHeaderFailureCount + " times");
                     Console.WriteLine("Sleeping for  " + waitTime + " milliseconds");
                     Thread.Sleep(waitTime);
                 }
                 catch (TaskCanceledException)
                 {
+                    taskCancelledFailtureCount++;
                     // Note: I'm a little worried that there might be an issue with deadlocks here.
                     // If there are still problems, I should investigate that
                     Console.WriteLine("Task cancelled... trying again?");
-                    failureCount++;
-                    int waitTime = CalculateWaitTime(failureCount);
+                    int waitTime = CalculateWaitTime(taskCancelledFailtureCount);
                     Thread.Sleep(waitTime);
 
                 }
