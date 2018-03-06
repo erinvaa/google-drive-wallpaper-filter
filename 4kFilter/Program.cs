@@ -6,6 +6,7 @@ using Google.Apis.Util.Store;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -13,6 +14,8 @@ namespace _4kFilter
 {
     class Program
     {
+        private const string lastUpdatedKey = "LastUpdated";
+
         // If modifying these scopes, delete your previously saved credentials
         // at ~/.credentials/drive-dotnet-quickstart.json
         static string[] Scopes = { DriveService.Scope.Drive };
@@ -53,6 +56,24 @@ namespace _4kFilter
             dimensionsMap.Add(2, new Dimensions(1920, 1200));
             folderIdMap.Add(2, FindFileWithName(service, destinationHdFolderName));
         }
+
+        //static void Main(string[] args)
+        //{
+        //    DateTime dateTime = DateTime.Now;
+
+        //    string serializedDateTime = DateTimeEncoder.EncodeDateTimeAsString(dateTime);
+
+        //    DateTime dateTime2 = DateTimeEncoder.DecodeStringAsDateTime(serializedDateTime);
+
+        //    if (dateTime == dateTime2)
+        //    {
+        //        Console.WriteLine("Yay!");
+        //    }
+        //    else
+        //    {
+        //        Console.WriteLine("Aww...");
+        //    }
+        //}
 
         static void Main(string[] args)
         {
@@ -150,7 +171,7 @@ namespace _4kFilter
             listRequest.PageSize = 1000;
             listRequest.Q = "'" + parentId + "' in parents";
             listRequest.PageToken = pageToken;
-            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, parents)";
+            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, appProperties)";
 
             // List files
             FileList requestResult = ExecuteUntilSuccessful(listRequest);
@@ -173,19 +194,15 @@ namespace _4kFilter
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
-                    // First check if this file is already sorted into the relevant directory.
-                    //bool alreadyProcessed = false;
-                    //foreach (var entry in folderIdMap)
-                    //{
-                    //    if (file.Parents.Contains(entry.Value)) {
-                    //        alreadyProcessed = true;
-                    //        break;
-                    //    }
-                    //}
-                    //if (alreadyProcessed)
-                    //{
-                    //    continue;
-                    //}
+                    //First check if this file is already sorted into the relevant directory.
+                    bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKey);
+                    if (alreadyUpdated)
+                    {
+                        // This last updated time could be used in the future to recategorize older files every time some parameters are changed
+                        // However for now, it's mere presence is sufficient for determining if a file has already been processed.
+                        DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKey]);
+                        continue;
+                    }
 
                     // Add to queue if it's not already added
                     foundImagesLock.AcquireWriterLock(1000);
@@ -224,6 +241,14 @@ namespace _4kFilter
                 }
                 catch (Google.GoogleApiException ex)
                 {
+                    foreach (var singleError in ex.Error.Errors)
+                    {
+                        if (singleError.Reason == "insufficientFilePermissions")
+                        {
+                            // Can't avoid this error... log and avoid writing to file directly, and just move directories
+                            throw new UserLacksPermissionsException("User cannot modify this file in the way requested.", ex);
+                        }
+                    }
                     failureCount++;
                     int waitTime = CalculateWaitTime(failureCount);
                     Console.WriteLine("Exception: " + ex.Message);
@@ -244,6 +269,14 @@ namespace _4kFilter
             }
 
             return results;
+        }
+
+        public class UserLacksPermissionsException : Exception
+        {
+            public UserLacksPermissionsException(Exception inner)
+                : base("UserLacksPermissionsException", inner) { }
+
+            public UserLacksPermissionsException(string message, Exception innerException) : base(message, innerException) { }
         }
 
         private static void CategorizeImage(DriveService service, Google.Apis.Drive.v3.Data.File file)
@@ -293,15 +326,50 @@ namespace _4kFilter
                     }
                 }
 
-                var request = GetRequestToAddDirectories(service, file.Id, matchingResolutions);
+                var request = GenerateUpdateRequest(service, file, matchingResolutions);
 
-                ExecuteUntilSuccessful(request);
+                try
+                {
+                    ExecuteUntilSuccessful(request);
+                }
+                catch (UserLacksPermissionsException ex)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine();
+                    Console.WriteLine(ex.Message + "\n Filename:" + file.Name);
+                    Console.WriteLine();
+                    Console.WriteLine();
+
+                    // Try again without modifying file information (just adjusting parents).
+                    request = GenerateUpdateRequest(service, file, matchingResolutions, false);
+                    // TODO I don't love nested try/catch... might see if I can improve this somehow.
+                    try
+                    {
+                        ExecuteUntilSuccessful(request);
+                    }
+                    catch (Exception ex2)
+                    {
+                        Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                        Console.WriteLine("Unknown, unfixable problem. Skipping file: " + file.Name);
+                        Console.WriteLine(ex2.Message);
+                        Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    }
+                }
             }
         }
 
-        private static FilesResource.UpdateRequest GetRequestToAddDirectories(DriveService service, string id, List<byte> resolutions)
+        private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile, 
+            List<byte> resolutions, bool writeToFile = true)
         {
-            var updateRequest = service.Files.Update(new Google.Apis.Drive.v3.Data.File(), id);
+            Google.Apis.Drive.v3.Data.File updateFile = new Google.Apis.Drive.v3.Data.File();
+            if (writeToFile)
+            {
+                updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
+                updateFile.AppProperties.Add(lastUpdatedKey, DateTimeEncoder.DateTimeNowEncoded());
+            }
+
+
+            var updateRequest = service.Files.Update(updateFile, originalFile.Id);
             List<string> newParents = new List<string>();
             foreach (var i in resolutions)
             {
