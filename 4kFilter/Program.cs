@@ -14,18 +14,20 @@ namespace _4kFilter
 {
     class Program
     {
-        private const string lastUpdatedKey = "LastUpdated";
+        // TODO consider making this key shorter (possible just one character)
+        private const string lastUpdatedKeyTemplate = "LastUpdated";
+        private static string lastUpdatedUserKey;
 
         // If modifying these scopes, delete your previously saved credentials
         // at ~/.credentials/drive-dotnet-quickstart.json
         static string[] Scopes = { DriveService.Scope.Drive };
-        static string ApplicationName = "4K Image Filter";
+        const string ApplicationName = "4K Image Filter";
 
-        //private static string wallpaperFolderName = "Wallpapers";
-        private static string wallpaperFolderName = "Resolution: 4K";
-        private static string destination4kFolderName = "Resolution: 4K";
-        private static string destinationHdFolderName = "Resolution: HD";
-        private static string destinationWqhdFolderName = "Resolution: WQHD";
+        //private const string wallpaperFolderName = "Wallpapers";
+        private const string wallpaperFolderName = "Resolution: 4K";
+        private const string destination4kFolderName = "Resolution: 4K";
+        private const string destinationHdFolderName = "Resolution: HD";
+        private const string destinationWqhdFolderName = "Resolution: WQHD";
 
 
         private static SemaphoreSlim runningTasks;
@@ -104,6 +106,12 @@ namespace _4kFilter
 
             PopulateDimenionInformation(service);
 
+            var aboutRequest = service.About.Get();
+            aboutRequest.Fields = "user";
+            About about = aboutRequest.Execute();
+            // TODO hash this
+            string user = about.User.EmailAddress;
+            lastUpdatedUserKey = lastUpdatedKeyTemplate + user;
 
             string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
@@ -136,6 +144,11 @@ namespace _4kFilter
             Console.WriteLine();
             Console.WriteLine("Done moving files into new folder");
             Console.ReadKey();
+        }
+
+        private static string HashEmailAddress(string input)
+        {
+            return input.GetHashCode().ToString("X");
         }
 
         private static DateTime lastImageAcquired = DateTime.MinValue;
@@ -195,12 +208,12 @@ namespace _4kFilter
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
                     //First check if this file is already sorted into the relevant directory.
-                    bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKey);
+                    bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKeyTemplate);
                     if (alreadyUpdated)
                     {
                         // This last updated time could be used in the future to recategorize older files every time some parameters are changed
                         // However for now, it's mere presence is sufficient for determining if a file has already been processed.
-                        DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKey]);
+                        DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKeyTemplate]);
                         continue;
                     }
 
@@ -365,7 +378,7 @@ namespace _4kFilter
             if (writeToFile)
             {
                 updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
-                updateFile.AppProperties.Add(lastUpdatedKey, DateTimeEncoder.DateTimeNowEncoded());
+                updateFile.AppProperties.Add(lastUpdatedKeyTemplate, DateTimeEncoder.DateTimeNowEncoded());
             }
 
 
