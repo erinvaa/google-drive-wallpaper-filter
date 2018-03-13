@@ -4,3 +4,5 @@
 
 /.vs/4kFilter/v15
 *.config
+/4kFilter/bin/Debug/client_secret.json
+/4kFilter/client_secret.json

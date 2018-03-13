@@ -15,8 +15,8 @@ namespace _4kFilter
     class Program
     {
         // TODO consider making this key shorter (possible just one character)
-        private const string lastUpdatedKeyTemplate = "LastUpdated";
-        private static string lastUpdatedUserKey;
+        private const string oldLastUpdatedKey = "LastUpdated";
+        private static string lastUpdatedKey;
 
         // If modifying these scopes, delete your previously saved credentials
         // at ~/.credentials/drive-dotnet-quickstart.json
@@ -24,7 +24,7 @@ namespace _4kFilter
         const string ApplicationName = "4K Image Filter";
 
         //private const string wallpaperFolderName = "Wallpapers";
-        private const string wallpaperFolderName = "Resolution: 4K";
+        private const string wallpaperFolderName = "Wallpapers";
         private const string destination4kFolderName = "Resolution: 4K";
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
@@ -111,7 +111,7 @@ namespace _4kFilter
             About about = aboutRequest.Execute();
             // TODO hash this
             string user = about.User.EmailAddress;
-            lastUpdatedUserKey = lastUpdatedKeyTemplate + user;
+            lastUpdatedKey = user.Split('@')[0];
 
             string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
@@ -164,14 +164,15 @@ namespace _4kFilter
                     {
                         totalImages = imageProcessingTaskManager.ImageCount;
                     }
-                    double imagesPerSecond = (double)(totalImages - imageProcessingTaskManager.ImageCount) / (DateTime.Now - lastImageAcquired).TotalSeconds;
-                    Console.WriteLine(imageProcessingTaskManager.ImageCount + " images to process at a rate of " +
+                    int completedImages = totalImages - imageProcessingTaskManager.ImageCount;
+                    double imagesPerSecond = (double)completedImages / (DateTime.Now - lastImageAcquired).TotalSeconds;
+                    Console.WriteLine(completedImages + "/" + totalImages + " (" + ((double)completedImages * 100d / (double)(totalImages)).ToString("0.00") + "%) images processed at a rate of " +
                         imagesPerSecond.ToString("0.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
                 }
                 else
                 {
                     Console.WriteLine(queuedThreads + " threads queued and " + (maxConcurrentThreads - runningTasks.CurrentCount) + " running and " +
-                        imageProcessingTaskManager.ImageCount + " images to process");
+                        imageProcessingTaskManager.ImageCount + " images found");
                 }
                 Thread.Sleep(500);
             }
@@ -207,13 +208,13 @@ namespace _4kFilter
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
-                    //First check if this file is already sorted into the relevant directory.
-                    bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKeyTemplate);
+                    // First check if this file is already sorted into the relevant directory.
+                    bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKey);
                     if (alreadyUpdated)
                     {
                         // This last updated time could be used in the future to recategorize older files every time some parameters are changed
                         // However for now, it's mere presence is sufficient for determining if a file has already been processed.
-                        DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKeyTemplate]);
+                        DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKey]);
                         continue;
                     }
 
@@ -378,7 +379,9 @@ namespace _4kFilter
             if (writeToFile)
             {
                 updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
-                updateFile.AppProperties.Add(lastUpdatedKeyTemplate, DateTimeEncoder.DateTimeNowEncoded());
+                updateFile.AppProperties.Add(lastUpdatedKey, DateTimeEncoder.DateTimeNowEncoded());
+                // Temporary code; only needs to exist until the app has been completed once.
+                updateFile.AppProperties.Remove(oldLastUpdatedKey);
             }
 
 
@@ -396,7 +399,6 @@ namespace _4kFilter
         private static MemoryStream getFileHeader(DriveService service, string fileId, int attemptNumber = 0)
         {
             var request = service.Files.Get(fileId);
-            // TODO investigate using download async
             var stream = new MemoryStream();
 
             long lowerByte = attemptNumber == 0 ? 0 : (long)numberOfBytesToRead * ((long)1 << (attemptNumber - 1));
