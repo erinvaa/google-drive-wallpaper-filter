@@ -29,6 +29,8 @@ namespace _4kFilter
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
 
+        private const string completedIdsFile = "completedFiles";
+
 
         private static SemaphoreSlim runningTasks;
         private static ReaderWriterLock foundImagesLock = new ReaderWriterLock();
@@ -39,6 +41,9 @@ namespace _4kFilter
         private static Random random = new Random();
         private static ImageProcessingTaskManager imageProcessingTaskManager;
         private static int numberOfBytesToRead = 75;
+        private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
+        private static StreamWriter completedIdsFileWriterStream;
+
 
         private static Dictionary<byte, Dimensions> dimensionsMap;
         private static Dictionary<byte, string> folderIdMap;
@@ -59,30 +64,11 @@ namespace _4kFilter
             folderIdMap.Add(2, FindFileWithName(service, destinationHdFolderName));
         }
 
-        //static void Main(string[] args)
-        //{
-        //    DateTime dateTime = DateTime.Now;
-
-        //    string serializedDateTime = DateTimeEncoder.EncodeDateTimeAsString(dateTime);
-
-        //    DateTime dateTime2 = DateTimeEncoder.DecodeStringAsDateTime(serializedDateTime);
-
-        //    if (dateTime == dateTime2)
-        //    {
-        //        Console.WriteLine("Yay!");
-        //    }
-        //    else
-        //    {
-        //        Console.WriteLine("Aww...");
-        //    }
-        //}
-
         static void Main(string[] args)
         {
             UserCredential credential;
 
-            using (var stream =
-                new FileStream("client_secret.json", FileMode.Open, FileAccess.Read))
+            using (var stream = new FileStream("client_secret.json", FileMode.Open, FileAccess.Read))
             {
                 string credPath = System.Environment.GetFolderPath(
                     System.Environment.SpecialFolder.Personal);
@@ -105,20 +91,18 @@ namespace _4kFilter
             });
 
             PopulateDimenionInformation(service);
+            
+            PopulateFileIdsFromLocalFile();
 
             var aboutRequest = service.About.Get();
             aboutRequest.Fields = "user";
             About about = aboutRequest.Execute();
-            // TODO hash this
             string user = about.User.EmailAddress;
             lastUpdatedKey = user.Split('@')[0];
 
             string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
             // Get ready for multithreading.
-            foundImagesLock.AcquireWriterLock(1000);
-            foundImages = new HashSet<string>();
-            foundImagesLock.ReleaseLock();
             imageProcessingTaskManager = new ImageProcessingTaskManager();
 
             resetEvent = new ManualResetEvent(false);
@@ -141,14 +125,50 @@ namespace _4kFilter
             imageProcessingTaskManager.StoppedEvent.WaitOne();
             loggerRunning = false;
 
+            completedIdsFileLock.AcquireWriterLock(1000);
+            completedIdsFileWriterStream.Close();
+            completedIdsFileLock.ReleaseWriterLock();
+
             Console.WriteLine();
             Console.WriteLine("Done moving files into new folder");
             Console.ReadKey();
         }
 
-        private static string HashEmailAddress(string input)
+        static void OnProcessExit(object sender, EventArgs e)
         {
-            return input.GetHashCode().ToString("X");
+            completedIdsFileLock.AcquireWriterLock(1000);
+            completedIdsFileWriterStream.Close();
+            completedIdsFileLock.ReleaseWriterLock();
+        }
+
+        private static void PopulateFileIdsFromLocalFile()
+        {
+            foundImagesLock.AcquireWriterLock(1000);
+            foundImages = new HashSet<string>();
+            foundImagesLock.ReleaseLock();
+
+
+            if (!System.IO.File.Exists(completedIdsFile))
+            {
+                completedIdsFileWriterStream = System.IO.File.CreateText(completedIdsFile);
+                return;
+            }
+
+            completedIdsFileLock.AcquireReaderLock(1000);
+            foundImagesLock.AcquireWriterLock(1000);
+            using (var reader = new StreamReader(completedIdsFile))
+            {
+                string readLine = reader.ReadLine();
+                while (readLine != null)
+                {
+                    foundImages.Add(readLine);
+                    readLine = reader.ReadLine(); 
+                }
+            }
+
+            completedIdsFileWriterStream = new StreamWriter(completedIdsFile, append:true);
+            foundImagesLock.ReleaseWriterLock();
+            completedIdsFileLock.ReleaseReaderLock();
         }
 
         private static DateTime lastImageAcquired = DateTime.MinValue;
@@ -185,7 +205,7 @@ namespace _4kFilter
             listRequest.PageSize = 1000;
             listRequest.Q = "'" + parentId + "' in parents";
             listRequest.PageToken = pageToken;
-            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, appProperties)";
+            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, appProperties, capabilities)";
 
             // List files
             FileList requestResult = ExecuteUntilSuccessful(listRequest);
@@ -259,8 +279,8 @@ namespace _4kFilter
                     {
                         if (singleError.Reason == "insufficientFilePermissions")
                         {
-                            // Can't avoid this error... log and avoid writing to file directly, and just move directories
-                            throw new UserLacksPermissionsException("User cannot modify this file in the way requested.", ex);
+                            // Shouldn't expect this error to go away after retries
+                            throw ex;
                         }
                     }
                     failureCount++;
@@ -283,14 +303,6 @@ namespace _4kFilter
             }
 
             return results;
-        }
-
-        public class UserLacksPermissionsException : Exception
-        {
-            public UserLacksPermissionsException(Exception inner)
-                : base("UserLacksPermissionsException", inner) { }
-
-            public UserLacksPermissionsException(string message, Exception innerException) : base(message, innerException) { }
         }
 
         private static void CategorizeImage(DriveService service, Google.Apis.Drive.v3.Data.File file)
@@ -346,42 +358,32 @@ namespace _4kFilter
                 {
                     ExecuteUntilSuccessful(request);
                 }
-                catch (UserLacksPermissionsException ex)
+                catch (Exception ex)
                 {
-                    Console.WriteLine();
-                    Console.WriteLine();
-                    Console.WriteLine(ex.Message + "\n Filename:" + file.Name);
-                    Console.WriteLine();
-                    Console.WriteLine();
-
-                    // Try again without modifying file information (just adjusting parents).
-                    request = GenerateUpdateRequest(service, file, matchingResolutions, false);
-                    // TODO I don't love nested try/catch... might see if I can improve this somehow.
-                    try
-                    {
-                        ExecuteUntilSuccessful(request);
-                    }
-                    catch (Exception ex2)
-                    {
-                        Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                        Console.WriteLine("Unknown, unfixable problem. Skipping file: " + file.Name);
-                        Console.WriteLine(ex2.Message);
-                        Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    }
+                    Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                    Console.WriteLine("Unknown, unfixable problem. Skipping file: " + file.Name);
+                    Console.WriteLine(ex.Message);
+                    Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
                 }
             }
         }
 
         private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile, 
-            List<byte> resolutions, bool writeToFile = true)
+            List<byte> resolutions)
         {
             Google.Apis.Drive.v3.Data.File updateFile = new Google.Apis.Drive.v3.Data.File();
-            if (writeToFile)
+            if (originalFile.Capabilities.CanEdit == true)
             {
                 updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
                 updateFile.AppProperties.Add(lastUpdatedKey, DateTimeEncoder.DateTimeNowEncoded());
-                // Temporary code; only needs to exist until the app has been completed once.
-                updateFile.AppProperties.Remove(oldLastUpdatedKey);
+            }
+            else
+            {
+                // As a backup to storing the found files in drive, store them locally.
+                completedIdsFileLock.AcquireWriterLock(1000);
+                completedIdsFileWriterStream.WriteLine(originalFile.Id);
+                completedIdsFileWriterStream.Flush();
+                completedIdsFileLock.ReleaseWriterLock();
             }
 
 
@@ -441,6 +443,7 @@ namespace _4kFilter
         }
 
         private static int slotTime = 50;
+
         private static int CalculateWaitTime(int failureCount)
         {
             // 2 ^ failure count
