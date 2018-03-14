@@ -6,7 +6,6 @@ using Google.Apis.Util.Store;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,9 +24,12 @@ namespace _4kFilter
 
         //private const string wallpaperFolderName = "Wallpapers";
         private const string wallpaperFolderName = "Wallpapers";
+        private const string defaultFolderName = wallpaperFolderName;
         private const string destination4kFolderName = "Resolution: 4K";
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
+
+        private static bool shouldFilterExistingFolders = false;
 
         private const string completedIdsFile = "completedFiles";
 
@@ -39,29 +41,39 @@ namespace _4kFilter
         private static int queuedThreads = 0;
         private static int maxConcurrentThreads = 20;
         private static Random random = new Random();
-        private static ImageProcessingTaskManager imageProcessingTaskManager;
+        private static ImageProcessingTaskDispatcher imageProcessingTaskManager;
         private static int numberOfBytesToRead = 75;
         private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
         private static StreamWriter completedIdsFileWriterStream;
 
 
-        private static Dictionary<byte, Dimensions> dimensionsMap;
-        private static Dictionary<byte, string> folderIdMap;
+        //private static Dictionary<byte, Dimensions> dimensionsMap;
+        //private static Dictionary<byte, string> folderIdMap;
+        private static IList<DirectoryRules> directoryRules;
+        private static IList<string> categoryDirectories;
+        private static string defaultFolderId;
 
         // This is writen so it should be possible to replace with user input (with some work)
         private static void PopulateDimenionInformation(DriveService service)
         {
-            dimensionsMap = new Dictionary<byte, Dimensions>();
-            folderIdMap = new Dictionary<byte, string>();
+            defaultFolderId = FindFileWithName(service, defaultFolderName);
 
-            dimensionsMap.Add(0, new Dimensions(3840, 2160));
-            folderIdMap.Add(0, FindFileWithName(service, destination4kFolderName));
+            directoryRules = new List<DirectoryRules>
+            {
+                new DirectoryRules(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
+                new DirectoryRules(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
+                new DirectoryRules(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
+                new DirectoryRules(defaultFolderId, Dimensions.None, Dimensions.None )
+            };
 
-            dimensionsMap.Add(1, new Dimensions(2560, 1440));
-            folderIdMap.Add(1, FindFileWithName(service, destinationWqhdFolderName));
-
-            dimensionsMap.Add(2, new Dimensions(1920, 1200));
-            folderIdMap.Add(2, FindFileWithName(service, destinationHdFolderName));
+            categoryDirectories = new List<string>();
+            foreach (var rule in directoryRules)
+            {
+                if (rule.TargetDirectoryId != defaultFolderId)
+                {
+                    categoryDirectories.Add(rule.TargetDirectoryId);
+                }
+            }
         }
 
         static void Main(string[] args)
@@ -103,7 +115,7 @@ namespace _4kFilter
             string wallpaperId = FindFileWithName(service, wallpaperFolderName);
 
             // Get ready for multithreading.
-            imageProcessingTaskManager = new ImageProcessingTaskManager();
+            imageProcessingTaskManager = new ImageProcessingTaskDispatcher();
 
             resetEvent = new ManualResetEvent(false);
             runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
@@ -118,11 +130,18 @@ namespace _4kFilter
             // Wait for all the logic to finish.
             resetEvent.WaitOne();
 
-            lastImageAcquired = DateTime.Now;
-            Console.WriteLine("Done scanning for files; starting to analyse images.");
-            imageProcessingTaskManager.Start();
-            imageProcessingTaskManager.StopWhenTasksCompleted = true; // Tell the processor no new tasks are coming.
-            imageProcessingTaskManager.StoppedEvent.WaitOne();
+            if (imageProcessingTaskManager.ImageCount > 0)
+            {
+                lastImageAcquired = DateTime.Now;
+                Console.WriteLine("Done scanning for files; starting to analyse images.");
+                imageProcessingTaskManager.Start();
+                imageProcessingTaskManager.StopWhenTasksCompleted = true; // Tell the processor no new tasks are coming.
+                imageProcessingTaskManager.StoppedEvent.WaitOne();
+            }
+            else
+            {
+                Console.WriteLine("No new images found");
+            }
             loggerRunning = false;
 
             completedIdsFileLock.AcquireWriterLock(1000);
@@ -162,7 +181,7 @@ namespace _4kFilter
                 while (readLine != null)
                 {
                     foundImages.Add(readLine);
-                    readLine = reader.ReadLine(); 
+                    readLine = reader.ReadLine();
                 }
             }
 
@@ -198,14 +217,14 @@ namespace _4kFilter
             }
         }
 
-        private static void FindNestedImagesAboveResolution(DriveService service, string parentId, string pageToken = null)
+        private static void FindNestedImagesAboveResolution(DriveService service, string parentId, bool isInKeyDirectory = false, string pageToken = null)
         {
             runningTasks.Wait();
             FilesResource.ListRequest listRequest = service.Files.List();
             listRequest.PageSize = 1000;
             listRequest.Q = "'" + parentId + "' in parents";
             listRequest.PageToken = pageToken;
-            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, appProperties, capabilities)";
+            listRequest.Fields = "nextPageToken, files(id, name, mimeType, fileExtension, appProperties, capabilities, parents)";
 
             // List files
             FileList requestResult = ExecuteUntilSuccessful(listRequest);
@@ -213,7 +232,7 @@ namespace _4kFilter
 
             if (requestResult.NextPageToken != null)
             {
-                Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, requestResult.NextPageToken));
+                Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, isInKeyDirectory, requestResult.NextPageToken));
                 queuedThreads++;
                 nextPageTask.Start();
             }
@@ -222,7 +241,8 @@ namespace _4kFilter
             {
                 if (file.MimeType == "application/vnd.google-apps.folder")
                 {
-                    Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id));
+                    isInKeyDirectory = shouldFilterExistingFolders && (isInKeyDirectory || categoryDirectories.Contains(file.Id));
+                    Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id, isInKeyDirectory));
                     queuedThreads++;
                     subDirectoryTask.Start();
                 }
@@ -230,7 +250,7 @@ namespace _4kFilter
                 {
                     // First check if this file is already sorted into the relevant directory.
                     bool alreadyUpdated = file.AppProperties != null && file.AppProperties.ContainsKey(lastUpdatedKey);
-                    if (alreadyUpdated)
+                    if (alreadyUpdated && !isInKeyDirectory)
                     {
                         // This last updated time could be used in the future to recategorize older files every time some parameters are changed
                         // However for now, it's mere presence is sufficient for determining if a file has already been processed.
@@ -307,12 +327,12 @@ namespace _4kFilter
 
         private static void CategorizeImage(DriveService service, Google.Apis.Drive.v3.Data.File file)
         {
-            int failureCount = 0;
+            int missCount = 0;
             bool success = false;
             Dimensions dimensions = Dimensions.None;
             while (!success)
             {
-                MemoryStream stream = getFileHeader(service, file.Id, failureCount);
+                MemoryStream stream = getFileHeader(service, file.Id, missCount);
                 if (stream.Length == 0)
                 {
                     Console.WriteLine("Header not present in file.");
@@ -336,46 +356,60 @@ namespace _4kFilter
                 }
                 catch (ImageHandler.HeaderNotFoundException)
                 {
-                    failureCount++;
+                    missCount++;
                 }
             }
 
-            if (dimensions != Dimensions.None)
+            HashSet<string> newParentIds = new HashSet<string>();
+            HashSet<string> removeParentsId = new HashSet<string>();
+
+            foreach (DirectoryRules entry in directoryRules)
             {
-                List<byte> matchingResolutions = new List<byte>();
-
-                foreach (KeyValuePair<byte, Dimensions> entry in dimensionsMap)
+                if (entry.MatchesCriteria(dimensions))
                 {
-                    if (dimensions >= entry.Value)
-                    {
-                        matchingResolutions.Add(entry.Key);
-                    }
+                    newParentIds.Add(entry.TargetDirectoryId);
                 }
-
-                var request = GenerateUpdateRequest(service, file, matchingResolutions);
-
-                try
+                else if (file.Parents.Contains(entry.TargetDirectoryId) && categoryDirectories.Contains(entry.TargetDirectoryId))
                 {
-                    ExecuteUntilSuccessful(request);
+                    removeParentsId.Add(entry.TargetDirectoryId);
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                    Console.WriteLine("Unknown, unfixable problem. Skipping file: " + file.Name);
-                    Console.WriteLine(ex.Message);
-                    Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-                }
+            }
+
+            // Make sure we aren't stranding files with no standard parents.
+            HashSet<string> standardParents = new HashSet<string>();
+            standardParents.UnionWith(file.Parents);
+            standardParents.UnionWith(newParentIds);
+            standardParents.RemoveWhere((x) => categoryDirectories.Contains(x) || removeParentsId.Contains(x));
+
+            if (standardParents.Count == 0)
+            {
+                newParentIds.Add(defaultFolderId);
+            }
+
+            var request = GenerateUpdateRequest(service, file, newParentIds, removeParentsId);
+
+            try
+            {
+                ExecuteUntilSuccessful(request);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+                Console.WriteLine("Unknown problem occurred. Skipping file: " + file.Name);
+                Console.WriteLine(ex.Message);
+                Console.WriteLine("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+
             }
         }
 
-        private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile, 
-            List<byte> resolutions)
+        private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile,
+            IEnumerable<string> newParentsIds, IEnumerable<string> removeParentsId = null)
         {
             Google.Apis.Drive.v3.Data.File updateFile = new Google.Apis.Drive.v3.Data.File();
             if (originalFile.Capabilities.CanEdit == true)
             {
                 updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
-                updateFile.AppProperties.Add(lastUpdatedKey, DateTimeEncoder.DateTimeNowEncoded());
+                updateFile.AppProperties[lastUpdatedKey] = DateTimeEncoder.DateTimeNowEncoded();
             }
             else
             {
@@ -388,13 +422,11 @@ namespace _4kFilter
 
 
             var updateRequest = service.Files.Update(updateFile, originalFile.Id);
-            List<string> newParents = new List<string>();
-            foreach (var i in resolutions)
+            updateRequest.AddParents = String.Join(",", newParentsIds);
+            if (removeParentsId != null)
             {
-                string parentId = folderIdMap[i];
-                newParents.Add(parentId);
+                updateRequest.RemoveParents = String.Join(",", removeParentsId);
             }
-            updateRequest.AddParents = String.Join(",", newParents);
             return updateRequest;
         }
 

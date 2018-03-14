@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 namespace _4kFilter
 {
     // NOTE BE VERY CAREFUL EDITING THIS CLASS. THERE ARE A LOT OF THREADING THINGS THAT AREN'T ENFORCED, BUT ARE VERY IMPORTANT
-    class ImageProcessingTaskManager
+    class ImageProcessingTaskDispatcher
     {
         private static int maxThreads = 10;
 
@@ -17,7 +17,6 @@ namespace _4kFilter
         private int _runningThreads;
         // This is a queue and should be enforced inside this class
         private LinkedList<Action> imageProcessingActions;
-
 
         public ManualResetEvent StoppedEvent { get; private set; }
         public int WaitTime { get; set; }
@@ -62,7 +61,7 @@ namespace _4kFilter
         }
 
 
-        public ImageProcessingTaskManager()
+        public ImageProcessingTaskDispatcher()
         {
             runningThreadsLock = new ReaderWriterLock();
             imageProcessingActionsLock = new ReaderWriterLock();

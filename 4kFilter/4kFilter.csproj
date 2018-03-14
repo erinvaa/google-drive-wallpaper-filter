@@ -79,8 +79,9 @@
   <ItemGroup>
     <Compile Include="DateTimeEncoder.cs" />
     <Compile Include="Dimensions.cs" />
+    <Compile Include="DirectoryRules.cs" />
     <Compile Include="ImageHandler.cs" />
-    <Compile Include="ImageProcessingTaskManager.cs" />
+    <Compile Include="ImageProcessingTaskDispatcher.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

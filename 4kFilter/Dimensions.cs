@@ -11,6 +11,20 @@
         }
 
         public static Dimensions None = new Dimensions(-1, -1);
+        public static Dimensions MinDimension
+        {
+            get
+            {
+                return new Dimensions(0, 0);
+            }
+        }
+        public static Dimensions MaxDimension
+        {
+            get
+            {
+                return new Dimensions(int.MaxValue, int.MaxValue);
+            }
+        }
 
         public static bool operator >(Dimensions a, Dimensions b)
         {
@@ -41,6 +55,7 @@
         {
             return a.height != b.height || a.width != b.width;
         }
+
 
         public override bool Equals(object obj)
         {
