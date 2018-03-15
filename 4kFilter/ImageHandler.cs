@@ -48,10 +48,10 @@ namespace _4kFilter
 
             Dimensions dimensions = new Dimensions();
 
-            dimensions.height = byteStream.ReadByte() << 8;
-            dimensions.height += byteStream.ReadByte();
-            dimensions.width = byteStream.ReadByte() << 8;
-            dimensions.width += byteStream.ReadByte();
+            dimensions.Height = byteStream.ReadByte() << 8;
+            dimensions.Height += byteStream.ReadByte();
+            dimensions.Width = byteStream.ReadByte() << 8;
+            dimensions.Width += byteStream.ReadByte();
 
             if (byteStream.ReadByte() == -1)
             {
@@ -60,10 +60,10 @@ namespace _4kFilter
 
             //Console.WriteLine("Width: " + width + " Height: " + height);
 
-            if (dimensions.width < 0 || dimensions.height < 0)
+            if (dimensions.Width < 0 || dimensions.Height < 0)
             {
-                Console.WriteLine("Bad negative value found - Width: " + dimensions.width + " Height: " + 
-                    dimensions.height + " Flag:" + readByte.ToString("X"));
+                Console.WriteLine("Bad negative value found - Width: " + dimensions.Width + " Height: " + 
+                    dimensions.Height + " Flag:" + readByte.ToString("X"));
             }
 
             return dimensions;
@@ -109,12 +109,12 @@ namespace _4kFilter
             // Found correct header. Now skip ahead to height and width information.
             Dimensions dimensions = new Dimensions();
 
-            dimensions.width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
-            dimensions.height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+            dimensions.Width = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
+            dimensions.Height = (byteStream.ReadByte() << 24) + (byteStream.ReadByte() << 16) + (byteStream.ReadByte() << 8) + byteStream.ReadByte();
 
-            if (dimensions.width < 0 || dimensions.height < 0)
+            if (dimensions.Width < 0 || dimensions.Height < 0)
             {
-                Console.WriteLine("Bad negative value found - Width: " + dimensions.width + " Height: " + dimensions.height);
+                Console.WriteLine("Bad negative value found - Width: " + dimensions.Width + " Height: " + dimensions.Height);
             }
 
             return dimensions;

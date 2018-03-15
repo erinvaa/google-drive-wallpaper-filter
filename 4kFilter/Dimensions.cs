@@ -2,12 +2,14 @@
 {
     public struct Dimensions
     {
-        public int width, height;
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public double Ratio => (double)Width / Height;
 
         public Dimensions(int width, int height)
         {
-            this.width = width;
-            this.height = height;
+            Width = width;
+            Height = height;
         }
 
         public static Dimensions None = new Dimensions(-1, -1);
@@ -28,32 +30,32 @@
 
         public static bool operator >(Dimensions a, Dimensions b)
         {
-            return a.height > b.height && a.width > b.width;
+            return a.Height > b.Height && a.Width > b.Width;
         }
 
         public static bool operator <(Dimensions a, Dimensions b)
         {
-            return a.height < b.height && a.width < b.width;
+            return a.Height < b.Height && a.Width < b.Width;
         }
 
         public static bool operator >=(Dimensions a, Dimensions b)
         {
-            return a.height >= b.height && a.width >= b.width;
+            return a.Height >= b.Height && a.Width >= b.Width;
         }
 
         public static bool operator <=(Dimensions a, Dimensions b)
         {
-            return a.height <= b.height && a.width <= b.width;
+            return a.Height <= b.Height && a.Width <= b.Width;
         }
 
         public static bool operator ==(Dimensions a, Dimensions b)
         {
-            return a.height == b.height && a.width == b.width;
+            return a.Height == b.Height && a.Width == b.Width;
         }
 
         public static bool operator !=(Dimensions a, Dimensions b)
         {
-            return a.height != b.height || a.width != b.width;
+            return a.Height != b.Height || a.Width != b.Width;
         }
 
 
@@ -65,16 +67,16 @@
             }
 
             var dimensions = (Dimensions)obj;
-            return height == dimensions.height &&
-                   width == dimensions.width;
+            return Height == dimensions.Height &&
+                   Width == dimensions.Width;
         }
 
         public override int GetHashCode()
         {
             var hashCode = -2029955663;
             hashCode = hashCode * -1521134295 + base.GetHashCode();
-            hashCode = hashCode * -1521134295 + height.GetHashCode();
-            hashCode = hashCode * -1521134295 + width.GetHashCode();
+            hashCode = hashCode * -1521134295 + Height.GetHashCode();
+            hashCode = hashCode * -1521134295 + Width.GetHashCode();
             return hashCode;
         }
     }

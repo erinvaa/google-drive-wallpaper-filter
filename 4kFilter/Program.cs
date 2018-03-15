@@ -1,4 +1,5 @@
-﻿using Google.Apis.Auth.OAuth2;
+﻿using _4kFilter.ImageFilters;
+using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Drive.v3.Data;
 using Google.Apis.Services;
@@ -49,7 +50,7 @@ namespace _4kFilter
 
         //private static Dictionary<byte, Dimensions> dimensionsMap;
         //private static Dictionary<byte, string> folderIdMap;
-        private static IList<DirectoryRules> directoryRules;
+        private static IList<ImageFilter> directoryRules;
         private static IList<string> categoryDirectories;
         private static string defaultFolderId;
 
@@ -58,12 +59,12 @@ namespace _4kFilter
         {
             defaultFolderId = FindFileWithName(service, defaultFolderName);
 
-            directoryRules = new List<DirectoryRules>
+            directoryRules = new List<ImageFilter>
             {
-                new DirectoryRules(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
-                new DirectoryRules(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
-                new DirectoryRules(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
-                new DirectoryRules(defaultFolderId, Dimensions.None, Dimensions.None )
+                new ImageSizeFilter(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
+                new ImageSizeFilter(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
+                new ImageSizeFilter(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
+                new ImageNoSizeDimensionsFilter(defaultFolderId)
             };
 
             categoryDirectories = new List<string>();
@@ -363,7 +364,7 @@ namespace _4kFilter
             HashSet<string> newParentIds = new HashSet<string>();
             HashSet<string> removeParentsId = new HashSet<string>();
 
-            foreach (DirectoryRules entry in directoryRules)
+            foreach (ImageSizeFilter entry in directoryRules)
             {
                 if (entry.MatchesCriteria(dimensions))
                 {

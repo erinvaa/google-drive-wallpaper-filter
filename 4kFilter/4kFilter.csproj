@@ -79,7 +79,10 @@
   <ItemGroup>
     <Compile Include="DateTimeEncoder.cs" />
     <Compile Include="Dimensions.cs" />
-    <Compile Include="DirectoryRules.cs" />
+    <Compile Include="ImageFilters\ImageNoSizeDimensionsFilter.cs" />
+    <Compile Include="ImageFilters\ImageRatioFilter.cs" />
+    <Compile Include="ImageFilters\ImageSizeFilter.cs" />
+    <Compile Include="ImageFilters\ImageFilter.cs" />
     <Compile Include="ImageHandler.cs" />
     <Compile Include="ImageProcessingTaskDispatcher.cs" />
     <Compile Include="Program.cs" />
