@@ -14,16 +14,14 @@ namespace _4kFilter
 {
     class Program
     {
-        // TODO consider making this key shorter (possible just one character)
-        private const string oldLastUpdatedKey = "LastUpdated";
         private static string lastUpdatedKey;
 
-        // If modifying these scopes, delete your previously saved credentials
-        // at ~/.credentials/drive-dotnet-quickstart.json
         static string[] Scopes = { DriveService.Scope.Drive };
         const string ApplicationName = "4K Image Filter";
 
-        //private const string wallpaperFolderName = "Wallpapers";
+        // ------------------------------------------------------------
+        //                         Settings
+        // ------------------------------------------------------------
         private const string wallpaperFolderName = "Wallpapers";
         private const string defaultFolderName = wallpaperFolderName;
         private const string noDimensionsFoundFolderName = "No Dimensions Found";
@@ -31,9 +29,11 @@ namespace _4kFilter
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
 
+        private static DateTime newestVersionTimestamp = new DateTime(2018, 3, 15);
         private static bool shouldFilterExistingFolders = false;
 
-        private const string completedIdsFile = "completedFiles";
+        private const string completedIdsFilename = "completedFiles";
+        // ------------------------------------------------------------
 
 
         private static SemaphoreSlim runningTasks;
@@ -48,9 +48,6 @@ namespace _4kFilter
         private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
         private static StreamWriter completedIdsFileWriterStream;
 
-
-        //private static Dictionary<byte, Dimensions> dimensionsMap;
-        //private static Dictionary<byte, string> folderIdMap;
         private static IList<ImageFilter> directoryRules;
         private static IList<string> categoryDirectories;
         private static string defaultFolderId;
@@ -123,7 +120,7 @@ namespace _4kFilter
             resetEvent = new ManualResetEvent(false);
             runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
 
-            Task rootTask = new Task(() => FindNestedImagesAboveResolution(service, wallpaperId));
+            Task rootTask = new Task(() => FindAllImages(service, wallpaperId));
             queuedThreads++;
             rootTask.Start();
 
@@ -170,15 +167,24 @@ namespace _4kFilter
             foundImagesLock.ReleaseLock();
 
 
-            if (!System.IO.File.Exists(completedIdsFile))
+            if (!System.IO.File.Exists(completedIdsFilename))
             {
-                completedIdsFileWriterStream = System.IO.File.CreateText(completedIdsFile);
+                completedIdsFileWriterStream = System.IO.File.CreateText(completedIdsFilename);
                 return;
             }
+            else if (new FileInfo(completedIdsFilename).LastWriteTimeUtc < newestVersionTimestamp)
+            {
+                // File is outdated; rewrite information.
+                completedIdsFileLock.AcquireReaderLock(1000);
+                System.IO.File.WriteAllText(completedIdsFilename, string.Empty);
+            }
+            else
+            {
+                completedIdsFileLock.AcquireReaderLock(1000);
+            }
 
-            completedIdsFileLock.AcquireReaderLock(1000);
             foundImagesLock.AcquireWriterLock(1000);
-            using (var reader = new StreamReader(completedIdsFile))
+            using (var reader = new StreamReader(completedIdsFilename))
             {
                 string readLine = reader.ReadLine();
                 while (readLine != null)
@@ -188,7 +194,7 @@ namespace _4kFilter
                 }
             }
 
-            completedIdsFileWriterStream = new StreamWriter(completedIdsFile, append:true);
+            completedIdsFileWriterStream = new StreamWriter(completedIdsFilename, append:true);
             foundImagesLock.ReleaseWriterLock();
             completedIdsFileLock.ReleaseReaderLock();
         }
@@ -220,7 +226,7 @@ namespace _4kFilter
             }
         }
 
-        private static void FindNestedImagesAboveResolution(DriveService service, string parentId, bool isInKeyDirectory = false, string pageToken = null)
+        private static void FindAllImages(DriveService service, string parentId, bool isInKeyDirectory = false, string pageToken = null)
         {
             runningTasks.Wait();
             FilesResource.ListRequest listRequest = service.Files.List();
@@ -235,7 +241,7 @@ namespace _4kFilter
 
             if (requestResult.NextPageToken != null)
             {
-                Task nextPageTask = new Task(() => FindNestedImagesAboveResolution(service, parentId, isInKeyDirectory, requestResult.NextPageToken));
+                Task nextPageTask = new Task(() => FindAllImages(service, parentId, isInKeyDirectory, requestResult.NextPageToken));
                 queuedThreads++;
                 nextPageTask.Start();
             }
@@ -244,10 +250,20 @@ namespace _4kFilter
             {
                 if (file.MimeType == "application/vnd.google-apps.folder")
                 {
-                    isInKeyDirectory = shouldFilterExistingFolders && (isInKeyDirectory || categoryDirectories.Contains(file.Id));
-                    Task subDirectoryTask = new Task(() => FindNestedImagesAboveResolution(service, file.Id, isInKeyDirectory));
-                    queuedThreads++;
-                    subDirectoryTask.Start();
+                    foundImagesLock.AcquireWriterLock(1000);
+                    if (!foundImages.Contains(file.Id))
+                    {
+                        foundImages.Add(file.Id);
+                        foundImagesLock.ReleaseWriterLock();
+
+                        isInKeyDirectory = shouldFilterExistingFolders && (isInKeyDirectory || categoryDirectories.Contains(file.Id));
+                        Task subDirectoryTask = new Task(() => FindAllImages(service, file.Id, isInKeyDirectory));
+                        queuedThreads++;
+                        subDirectoryTask.Start();
+                    } else
+                    {
+                        foundImagesLock.ReleaseWriterLock();
+                    }
                 }
                 else if (file.FileExtension == "png" || file.FileExtension == "jpeg" || file.FileExtension == "jpg")
                 {
@@ -258,7 +274,7 @@ namespace _4kFilter
                         // This last updated time could be used in the future to recategorize older files every time some parameters are changed
                         // However for now, it's mere presence is sufficient for determining if a file has already been processed.
                         DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKey]);
-                        continue;
+                        if (lastUpdatedTime >= newestVersionTimestamp) continue;
                     }
 
                     // Add to queue if it's not already added
@@ -335,7 +351,7 @@ namespace _4kFilter
             Dimensions dimensions = Dimensions.None;
             while (!success)
             {
-                MemoryStream stream = getFileHeader(service, file.Id, missCount);
+                MemoryStream stream = GetFileHeader(service, file.Id, missCount);
                 if (stream.Length == 0)
                 {
                     Console.WriteLine("Header not present in file.");
@@ -366,7 +382,7 @@ namespace _4kFilter
             HashSet<string> newParentIds = new HashSet<string>();
             HashSet<string> removeParentsId = new HashSet<string>();
 
-            foreach (ImageSizeFilter entry in directoryRules)
+            foreach (ImageFilter entry in directoryRules)
             {
                 // This might be starting to get too complicate; look into streamlining it potentially
                 if (entry.MatchesCriteria(dimensions))
@@ -441,7 +457,7 @@ namespace _4kFilter
             return updateRequest;
         }
 
-        private static MemoryStream getFileHeader(DriveService service, string fileId, int attemptNumber = 0)
+        private static MemoryStream GetFileHeader(DriveService service, string fileId, int attemptNumber = 0)
         {
             var request = service.Files.Get(fileId);
             var stream = new MemoryStream();
