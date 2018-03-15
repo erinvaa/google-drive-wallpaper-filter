@@ -26,6 +26,7 @@ namespace _4kFilter
         //private const string wallpaperFolderName = "Wallpapers";
         private const string wallpaperFolderName = "Wallpapers";
         private const string defaultFolderName = wallpaperFolderName;
+        private const string noDimensionsFoundFolderName = "No Dimensions Found";
         private const string destination4kFolderName = "Resolution: 4K";
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
@@ -58,19 +59,20 @@ namespace _4kFilter
         private static void PopulateDimenionInformation(DriveService service)
         {
             defaultFolderId = FindFileWithName(service, defaultFolderName);
+            string noDimensionsFoundFolderId = FindFileWithName(service, noDimensionsFoundFolderName);
 
             directoryRules = new List<ImageFilter>
             {
                 new ImageSizeFilter(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
-                new ImageNoSizeDimensionsFilter(defaultFolderId)
+                new ImageNoSizeDimensionsFilter(noDimensionsFoundFolderId)
             };
 
             categoryDirectories = new List<string>();
             foreach (var rule in directoryRules)
             {
-                if (rule.TargetDirectoryId != defaultFolderId)
+                if (rule.TargetDirectoryId != defaultFolderId && rule.TargetDirectoryId != noDimensionsFoundFolderId)
                 {
                     categoryDirectories.Add(rule.TargetDirectoryId);
                 }
@@ -366,13 +368,21 @@ namespace _4kFilter
 
             foreach (ImageSizeFilter entry in directoryRules)
             {
+                // This might be starting to get too complicate; look into streamlining it potentially
                 if (entry.MatchesCriteria(dimensions))
                 {
-                    newParentIds.Add(entry.TargetDirectoryId);
+                    if (!removeParentsId.Contains(entry.TargetDirectoryId))
+                    {
+                        newParentIds.Add(entry.TargetDirectoryId);
+                    }
                 }
-                else if (file.Parents.Contains(entry.TargetDirectoryId) && categoryDirectories.Contains(entry.TargetDirectoryId))
+                else if (categoryDirectories.Contains(entry.TargetDirectoryId))
                 {
-                    removeParentsId.Add(entry.TargetDirectoryId);
+                    newParentIds.Remove(entry.TargetDirectoryId);
+                    if (file.Parents.Contains(entry.TargetDirectoryId))
+                    {
+                        removeParentsId.Add(entry.TargetDirectoryId);
+                    }
                 }
             }
 
