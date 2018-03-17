@@ -28,8 +28,10 @@ namespace _4kFilter
         private const string destination4kFolderName = "Resolution: 4K";
         private const string destinationHdFolderName = "Resolution: HD";
         private const string destinationWqhdFolderName = "Resolution: WQHD";
+        private const string destinationPhoneRatioFolderName = "Phone Ratio";
+        private const string destinationWidescreenRatioFolderName = "Widescreen";
 
-        private static DateTime newestVersionTimestamp = new DateTime(2018, 3, 15);
+        private static DateTime newestVersionTimestamp = DateTime.Now;
         private static bool shouldFilterExistingFolders = false;
 
         private const string completedIdsFilename = "completedFiles";
@@ -53,7 +55,7 @@ namespace _4kFilter
         private static string defaultFolderId;
 
         // This is writen so it should be possible to replace with user input (with some work)
-        private static void PopulateDimenionInformation(DriveService service)
+        private static void PopulateDimensionInformation(DriveService service)
         {
             defaultFolderId = FindFileWithName(service, defaultFolderName);
             string noDimensionsFoundFolderId = FindFileWithName(service, noDimensionsFoundFolderName);
@@ -63,6 +65,8 @@ namespace _4kFilter
                 new ImageSizeFilter(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
+                new ImageRatioFilter(service, destinationWidescreenRatioFolderName, 16d/10d, 0.01),
+                new ImageRatioFilter(service, destinationPhoneRatioFolderName, null, 9d/10d),
                 new ImageNoSizeDimensionsFilter(noDimensionsFoundFolderId)
             };
 
@@ -102,7 +106,7 @@ namespace _4kFilter
                 ApplicationName = ApplicationName,
             });
 
-            PopulateDimenionInformation(service);
+            PopulateDimensionInformation(service);
             
             PopulateFileIdsFromLocalFile();
 

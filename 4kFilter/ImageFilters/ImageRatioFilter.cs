@@ -38,7 +38,7 @@ namespace _4kFilter.ImageFilters
 
         public override bool MatchesCriteria(Dimensions dimensions)
         {
-            return MinRatio <= dimensions.Ratio && dimensions.Ratio <= MaxRatio;
+            return (MinRatio == null || MinRatio <= dimensions.Ratio) && (MaxRatio == null || dimensions.Ratio <= MaxRatio);
         }
     }
 }
