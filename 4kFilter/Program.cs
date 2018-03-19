@@ -23,6 +23,7 @@ namespace _4kFilter
         //                         Settings
         // ------------------------------------------------------------
         private const string wallpaperFolderName = "Wallpapers";
+        //private const string wallpaperFolderName = noDimensionsFoundFolderName;
         private const string defaultFolderName = wallpaperFolderName;
         private const string noDimensionsFoundFolderName = "No Dimensions Found";
         private const string destination4kFolderName = "Resolution: 4K";
@@ -32,6 +33,7 @@ namespace _4kFilter
         private const string destinationWidescreenRatioFolderName = "Widescreen";
 
         private static DateTime newestVersionTimestamp = DateTime.Now;
+        //private static DateTime newestVersionTimestamp = DateTime.MinValue;
         private static bool shouldFilterExistingFolders = false;
 
         private const string completedIdsFilename = "completedFiles";
@@ -353,6 +355,7 @@ namespace _4kFilter
             int missCount = 0;
             bool success = false;
             Dimensions dimensions = Dimensions.None;
+            ImageHandler handler = new ImageHandler();
             while (!success)
             {
                 MemoryStream stream = GetFileHeader(service, file.Id, missCount);
@@ -363,18 +366,7 @@ namespace _4kFilter
                 }
                 try
                 {
-                    switch (file.FileExtension)
-                    {
-                        case "png":
-                            dimensions = ImageHandler.ReadPngDimensions(stream);
-                            break;
-                        case "jpeg":
-                        case "jpg":
-                            dimensions = ImageHandler.ReadJpgDimensions(stream);
-                            break;
-                        default:
-                            break;
-                    }
+                    handler.ReadDimensions(stream);
                     success = true;
                 }
                 catch (ImageHandler.HeaderNotFoundException)

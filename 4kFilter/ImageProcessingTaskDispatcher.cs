@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -10,7 +9,7 @@ namespace _4kFilter
     // NOTE BE VERY CAREFUL EDITING THIS CLASS. THERE ARE A LOT OF THREADING THINGS THAT AREN'T ENFORCED, BUT ARE VERY IMPORTANT
     class ImageProcessingTaskDispatcher
     {
-        private static int maxThreads = 10;
+        private static int maxThreads = 15;
 
         private ReaderWriterLock imageProcessingActionsLock;
         private ReaderWriterLock runningThreadsLock;
