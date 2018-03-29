@@ -53,7 +53,6 @@ namespace _4kFilter
         private static int maxConcurrentThreads = 20;
         private static Random random = new Random();
         private static ImageProcessingTaskDispatcher imageProcessingTaskManager;
-        private static int numberOfBytesToRead = 75;
         private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
         private static StreamWriter completedIdsFileWriterStream;
         private static StreamWriter metadataFileWriterStream;
@@ -61,6 +60,10 @@ namespace _4kFilter
         private static IList<ImageFilter> directoryRules;
         private static IList<string> categoryDirectories;
         private static string defaultFolderId;
+
+        private class AlreadyAttemptedEntireFileException : Exception { }
+
+        private static long[] byteChunks = new long[] { 167, 525, 20_000 };
 
         // This is writen so it should be possible to replace with user input (with some work)
         private static void PopulateDimensionInformation(DriveService service)
@@ -113,7 +116,7 @@ namespace _4kFilter
             });
 
             PopulateDimensionInformation(service);
-            
+
             PopulateFileIdsFromLocalFile();
 
             SetupMetadataFile();
@@ -175,7 +178,7 @@ namespace _4kFilter
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
-            lock(metadataFileWriterStream)
+            lock (metadataFileWriterStream)
             {
                 metadataFileWriterStream.Close();
             }
@@ -235,7 +238,7 @@ namespace _4kFilter
                 }
             }
 
-            completedIdsFileWriterStream = new StreamWriter(CompletedIdsFilename, append:true);
+            completedIdsFileWriterStream = new StreamWriter(CompletedIdsFilename, append: true);
             foundImagesLock.ReleaseWriterLock();
             completedIdsFileLock.ReleaseReaderLock();
         }
@@ -301,7 +304,8 @@ namespace _4kFilter
                         Task subDirectoryTask = new Task(() => FindAllImages(service, file.Id, isInKeyDirectory));
                         queuedThreads++;
                         subDirectoryTask.Start();
-                    } else
+                    }
+                    else
                     {
                         foundImagesLock.ReleaseWriterLock();
                     }
@@ -394,8 +398,12 @@ namespace _4kFilter
             ImageHandler handler = new ImageHandler();
             while (!success)
             {
-                MemoryStream stream = GetFileHeader(service, file.Id, missCount);
-                if (stream.Length == 0)
+                MemoryStream stream;
+                try
+                {
+                    stream = GetFileHeader(service, file.Id, missCount);
+                }
+                catch (AlreadyAttemptedEntireFileException)
                 {
                     Console.WriteLine("Header not present in file.");
                     break;
@@ -430,6 +438,8 @@ namespace _4kFilter
                 long headerPositionInFile = GetLowerByte(missCount) + handler.EndOfMetadataIndex;
                 lock (metadataFileWriterStream)
                 {
+                    metadataFileWriterStream.Write(file.Name);
+                    metadataFileWriterStream.Write(',');
                     metadataFileWriterStream.WriteLine(headerPositionInFile);
                     metadataFileWriterStream.Flush();
                 }
@@ -495,7 +505,7 @@ namespace _4kFilter
 
         private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile,
             IEnumerable<string> newParentsIds, IEnumerable<string> removeParentsId = null, string newName = null)
-        { 
+        {
             Google.Apis.Drive.v3.Data.File updateFile = new Google.Apis.Drive.v3.Data.File();
             if (originalFile.Capabilities.CanEdit == true)
             {
@@ -530,9 +540,9 @@ namespace _4kFilter
             var request = service.Files.Get(fileId);
             var stream = new MemoryStream();
 
-            long lowerByte = GetLowerByte(attemptNumber);
+            long? lowerByte = GetLowerByte(attemptNumber);
             // The 10 byte overlap between requests is so that the header isn't split between two requests.
-            long upperByte = numberOfBytesToRead * (1L << attemptNumber) + 10L;
+            long? upperByte = GetUpperByte(attemptNumber);
 
             // TODO refactor this out (and combine with other version)
             int missedHeaderFailureCount = 0;
@@ -569,9 +579,31 @@ namespace _4kFilter
             return stream;
         }
 
+
+        private static long? GetUpperByte(int attemptNumber)
+        {
+            if (attemptNumber == byteChunks.Length)
+            {
+                return null;
+            }
+            else if (attemptNumber > byteChunks.Length)
+            {
+                throw new AlreadyAttemptedEntireFileException();
+            }
+            return byteChunks[attemptNumber];
+        }
+
         private static long GetLowerByte(int attemptNumber)
         {
-            return attemptNumber == 0 ? 0L : numberOfBytesToRead * (1L << (attemptNumber - 1));
+            if (attemptNumber == 0)
+            {
+                return 0;
+            }
+            else if (attemptNumber > byteChunks.Length)
+            {
+                throw new AlreadyAttemptedEntireFileException();
+            }
+            return byteChunks[attemptNumber - 1];
         }
 
         private static int slotTime = 50;
