@@ -93,6 +93,7 @@ namespace _4kFilter
         }
 
         public FileType InternalFileType { get; private set; }
+        public long EndOfMetadataIndex { get; private set; }
                 
         public ImageHandler()
         {
@@ -157,6 +158,8 @@ namespace _4kFilter
                     Console.WriteLine("Found currently unsupported filetype");
                     break;
             }
+
+            EndOfMetadataIndex = byteStream.Position;
 
             if (byteStream.ReadByte() == -1)
             {

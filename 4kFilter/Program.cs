@@ -24,7 +24,7 @@ namespace _4kFilter
         // ------------------------------------------------------------
         private const string wallpaperFolderName = "Wallpapers";
         //private const string wallpaperFolderName = noDimensionsFoundFolderName;
-        private const string defaultFolderName = wallpaperFolderName;
+        private const string defaultFolderName = "Wallpapers";
         private const string noDimensionsFoundFolderName = "No Dimensions Found";
         private const string destination4kFolderName = "Resolution: 4K";
         private const string destinationHdFolderName = "Resolution: HD";
@@ -32,13 +32,17 @@ namespace _4kFilter
         private const string destinationPhoneRatioFolderName = "Phone Ratio";
         private const string destinationWidescreenRatioFolderName = "Widescreen";
 
+        //private static DateTime newestVersionTimestamp = new DateTime(2018, 3, 19, 1, 10, 0);
         private static DateTime newestVersionTimestamp = DateTime.Now;
         //private static DateTime newestVersionTimestamp = DateTime.MinValue;
         private static bool shouldFilterExistingFolders = false;
+        private static bool shouldRenameIncorrectExtensions = true;
+
+        // Null to not report metadata.
+        private static string metadataFile = "metadata";
 
         private const string completedIdsFilename = "completedFiles";
         // ------------------------------------------------------------
-
 
         private static SemaphoreSlim runningTasks;
         private static ReaderWriterLock foundImagesLock = new ReaderWriterLock();
@@ -51,6 +55,7 @@ namespace _4kFilter
         private static int numberOfBytesToRead = 75;
         private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
         private static StreamWriter completedIdsFileWriterStream;
+        private static StreamWriter metadataFileWriterStream;
 
         private static IList<ImageFilter> directoryRules;
         private static IList<string> categoryDirectories;
@@ -60,7 +65,6 @@ namespace _4kFilter
         private static void PopulateDimensionInformation(DriveService service)
         {
             defaultFolderId = FindFileWithName(service, defaultFolderName);
-            string noDimensionsFoundFolderId = FindFileWithName(service, noDimensionsFoundFolderName);
 
             directoryRules = new List<ImageFilter>
             {
@@ -69,13 +73,13 @@ namespace _4kFilter
                 new ImageSizeFilter(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
                 new ImageRatioFilter(service, destinationWidescreenRatioFolderName, 16d/10d, 0.01),
                 new ImageRatioFilter(service, destinationPhoneRatioFolderName, null, 9d/10d),
-                new ImageNoSizeDimensionsFilter(noDimensionsFoundFolderId)
+                new ImageNoSizeDimensionsFilter(service, noDimensionsFoundFolderName)
             };
 
             categoryDirectories = new List<string>();
             foreach (var rule in directoryRules)
             {
-                if (rule.TargetDirectoryId != defaultFolderId && rule.TargetDirectoryId != noDimensionsFoundFolderId)
+                if (rule.TargetDirectoryId != defaultFolderId)
                 {
                     categoryDirectories.Add(rule.TargetDirectoryId);
                 }
@@ -88,8 +92,7 @@ namespace _4kFilter
 
             using (var stream = new FileStream("client_secret.json", FileMode.Open, FileAccess.Read))
             {
-                string credPath = System.Environment.GetFolderPath(
-                    System.Environment.SpecialFolder.Personal);
+                string credPath = Environment.GetFolderPath(Environment.SpecialFolder.Personal);
                 credPath = Path.Combine(credPath, ".credentials/drive-4k-filter.json");
 
                 credential = GoogleWebAuthorizationBroker.AuthorizeAsync(
@@ -111,6 +114,8 @@ namespace _4kFilter
             PopulateDimensionInformation(service);
             
             PopulateFileIdsFromLocalFile();
+
+
 
             var aboutRequest = service.About.Get();
             aboutRequest.Fields = "user";
@@ -164,6 +169,11 @@ namespace _4kFilter
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
+        }
+
+        private static void SetupMetadataFile()
+        {
+            //metadataFileWriterStream
         }
 
         private static void PopulateFileIdsFromLocalFile()
@@ -354,6 +364,7 @@ namespace _4kFilter
         {
             int missCount = 0;
             bool success = false;
+            string newName = null;
             Dimensions dimensions = Dimensions.None;
             ImageHandler handler = new ImageHandler();
             while (!success)
@@ -366,12 +377,26 @@ namespace _4kFilter
                 }
                 try
                 {
-                    handler.ReadDimensions(stream);
+                    dimensions = handler.ReadDimensions(stream);
                     success = true;
                 }
                 catch (ImageHandler.HeaderNotFoundException)
                 {
                     missCount++;
+                }
+            }
+
+            if (shouldRenameIncorrectExtensions)
+            {
+                if (handler.InternalFileType == ImageHandler.FileType.PNG && file.FileExtension != "png")
+                {
+                    Console.WriteLine("PNG file found with different extension '" + file.FileExtension + "'... renaming.");
+                    newName = ReplaceExtension(file.Name, "png");
+                }
+                else if (handler.InternalFileType == ImageHandler.FileType.JPG && file.FileExtension != "jpg" && file.FileExtension != "jpeg")
+                {
+                    Console.WriteLine("JPG file found with different extension '" + file.FileExtension + "'... renaming.");
+                    newName = ReplaceExtension(file.Name, "jpg");
                 }
             }
 
@@ -409,7 +434,7 @@ namespace _4kFilter
                 newParentIds.Add(defaultFolderId);
             }
 
-            var request = GenerateUpdateRequest(service, file, newParentIds, removeParentsId);
+            var request = GenerateUpdateRequest(service, file, newParentIds, removeParentsId, newName);
 
             try
             {
@@ -425,14 +450,27 @@ namespace _4kFilter
             }
         }
 
-        private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile,
-            IEnumerable<string> newParentsIds, IEnumerable<string> removeParentsId = null)
+        private static string ReplaceExtension(string name, string newExt)
         {
+            string newName;
+            int indexPosition = name.LastIndexOf('.');
+            newName = name.Remove(indexPosition + 1) + newExt;
+            return newName;
+        }
+
+        private static FilesResource.UpdateRequest GenerateUpdateRequest(DriveService service, Google.Apis.Drive.v3.Data.File originalFile,
+            IEnumerable<string> newParentsIds, IEnumerable<string> removeParentsId = null, string newName = null)
+        { 
             Google.Apis.Drive.v3.Data.File updateFile = new Google.Apis.Drive.v3.Data.File();
             if (originalFile.Capabilities.CanEdit == true)
             {
                 updateFile.AppProperties = originalFile.AppProperties ?? new Dictionary<string, string>();
                 updateFile.AppProperties[lastUpdatedKey] = DateTimeEncoder.DateTimeNowEncoded();
+
+                if (newName != null)
+                {
+                    updateFile.Name = newName;
+                }
             }
             else
             {
@@ -442,7 +480,6 @@ namespace _4kFilter
                 completedIdsFileWriterStream.Flush();
                 completedIdsFileLock.ReleaseWriterLock();
             }
-
 
             var updateRequest = service.Files.Update(updateFile, originalFile.Id);
             updateRequest.AddParents = String.Join(",", newParentsIds);
@@ -502,7 +539,7 @@ namespace _4kFilter
         private static int CalculateWaitTime(int failureCount)
         {
             // 2 ^ failure count
-            return (int)random.Next(1 << failureCount) * slotTime;
+            return random.Next(1 << failureCount) * slotTime;
         }
 
         private static string FindFileWithName(DriveService service, string filename)
