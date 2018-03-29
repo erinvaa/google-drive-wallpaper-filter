@@ -22,28 +22,29 @@ namespace _4kFilter
         // ------------------------------------------------------------
         //                         Settings
         // ------------------------------------------------------------
-        private const string wallpaperFolderName = "Wallpapers";
+        private const string WallpaperFolderName = "Wallpapers";
         //private const string wallpaperFolderName = noDimensionsFoundFolderName;
-        private const string defaultFolderName = "Wallpapers";
-        private const string noDimensionsFoundFolderName = "No Dimensions Found";
-        private const string destination4kFolderName = "Resolution: 4K";
-        private const string destinationHdFolderName = "Resolution: HD";
-        private const string destinationWqhdFolderName = "Resolution: WQHD";
-        private const string destinationPhoneRatioFolderName = "Phone Ratio";
-        private const string destinationWidescreenRatioFolderName = "Widescreen";
+        private const string DefaultFolderName = "Wallpapers";
+        private const string NoDimensionsFoundFolderName = "No Dimensions Found";
+        private const string Destination4kFolderName = "Resolution: 4K";
+        private const string DestinationHdFolderName = "Resolution: HD";
+        private const string DestinationWqhdFolderName = "Resolution: WQHD";
+        private const string DestinationPhoneRatioFolderName = "Phone Ratio";
+        private const string DestinationWidescreenRatioFolderName = "Widescreen";
 
-        //private static DateTime newestVersionTimestamp = new DateTime(2018, 3, 19, 1, 10, 0);
-        private static DateTime newestVersionTimestamp = DateTime.Now;
-        //private static DateTime newestVersionTimestamp = DateTime.MinValue;
-        private static bool shouldFilterExistingFolders = false;
-        private static bool shouldRenameIncorrectExtensions = true;
+        //private static DateTime NewestVersionTimestamp = new DateTime(2018, 3, 19, 1, 10, 0);
+        private static DateTime NewestVersionTimestamp = DateTime.Now;
+        //private static DateTime NewestVersionTimestamp = DateTime.MinValue;
+        private static bool ShouldFilterExistingFolders = false;
+        private static bool ShouldRenameIncorrectExtensions = true;
 
         // Null to not report metadata.
-        private static string metadataFile = "metadata";
+        private static string MetadataFilename = "metadata";
 
-        private const string completedIdsFilename = "completedFiles";
+        private const string CompletedIdsFilename = "completedFiles";
         // ------------------------------------------------------------
 
+        private static bool ShouldRecordMetadata => MetadataFilename != null;
         private static SemaphoreSlim runningTasks;
         private static ReaderWriterLock foundImagesLock = new ReaderWriterLock();
         private static ISet<string> foundImages;
@@ -64,16 +65,16 @@ namespace _4kFilter
         // This is writen so it should be possible to replace with user input (with some work)
         private static void PopulateDimensionInformation(DriveService service)
         {
-            defaultFolderId = FindFileWithName(service, defaultFolderName);
+            defaultFolderId = FindFileWithName(service, DefaultFolderName);
 
             directoryRules = new List<ImageFilter>
             {
-                new ImageSizeFilter(service, destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
-                new ImageSizeFilter(service, destinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
-                new ImageSizeFilter(service, destinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
-                new ImageRatioFilter(service, destinationWidescreenRatioFolderName, 16d/10d, 0.01),
-                new ImageRatioFilter(service, destinationPhoneRatioFolderName, null, 9d/10d),
-                new ImageNoSizeDimensionsFilter(service, noDimensionsFoundFolderName)
+                new ImageSizeFilter(service, Destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
+                new ImageSizeFilter(service, DestinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
+                new ImageSizeFilter(service, DestinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
+                new ImageRatioFilter(service, DestinationWidescreenRatioFolderName, 16d/10d, 0.01),
+                new ImageRatioFilter(service, DestinationPhoneRatioFolderName, null, 9d/10d),
+                new ImageNoSizeDimensionsFilter(service, NoDimensionsFoundFolderName)
             };
 
             categoryDirectories = new List<string>();
@@ -115,7 +116,7 @@ namespace _4kFilter
             
             PopulateFileIdsFromLocalFile();
 
-
+            SetupMetadataFile();
 
             var aboutRequest = service.About.Get();
             aboutRequest.Fields = "user";
@@ -123,7 +124,7 @@ namespace _4kFilter
             string user = about.User.EmailAddress;
             lastUpdatedKey = user.Split('@')[0];
 
-            string wallpaperId = FindFileWithName(service, wallpaperFolderName);
+            string wallpaperId = FindFileWithName(service, WallpaperFolderName);
 
             // Get ready for multithreading.
             imageProcessingTaskManager = new ImageProcessingTaskDispatcher();
@@ -158,6 +159,10 @@ namespace _4kFilter
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
+            lock (metadataFileWriterStream)
+            {
+                metadataFileWriterStream.Close();
+            }
 
             Console.WriteLine();
             Console.WriteLine("Done moving files into new folder");
@@ -166,14 +171,34 @@ namespace _4kFilter
 
         static void OnProcessExit(object sender, EventArgs e)
         {
+            // TODO this could be a closeOpenFiles method or something
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
+            lock(metadataFileWriterStream)
+            {
+                metadataFileWriterStream.Close();
+            }
         }
 
         private static void SetupMetadataFile()
         {
-            //metadataFileWriterStream
+            if (ShouldRecordMetadata)
+            {
+                if (!System.IO.File.Exists(MetadataFilename))
+                {
+                    metadataFileWriterStream = System.IO.File.CreateText(MetadataFilename);
+                    return;
+                }
+                else if (new FileInfo(CompletedIdsFilename).LastWriteTimeUtc < NewestVersionTimestamp)
+                {
+                    // File is outdated; rewrite information.
+                    System.IO.File.WriteAllText(MetadataFilename, string.Empty);
+                }
+
+                metadataFileWriterStream = new StreamWriter(MetadataFilename, append: true);
+
+            }
         }
 
         private static void PopulateFileIdsFromLocalFile()
@@ -183,16 +208,16 @@ namespace _4kFilter
             foundImagesLock.ReleaseLock();
 
 
-            if (!System.IO.File.Exists(completedIdsFilename))
+            if (!System.IO.File.Exists(CompletedIdsFilename))
             {
-                completedIdsFileWriterStream = System.IO.File.CreateText(completedIdsFilename);
+                completedIdsFileWriterStream = System.IO.File.CreateText(CompletedIdsFilename);
                 return;
             }
-            else if (new FileInfo(completedIdsFilename).LastWriteTimeUtc < newestVersionTimestamp)
+            else if (new FileInfo(CompletedIdsFilename).LastWriteTimeUtc < NewestVersionTimestamp)
             {
                 // File is outdated; rewrite information.
                 completedIdsFileLock.AcquireReaderLock(1000);
-                System.IO.File.WriteAllText(completedIdsFilename, string.Empty);
+                System.IO.File.WriteAllText(CompletedIdsFilename, string.Empty);
             }
             else
             {
@@ -200,7 +225,7 @@ namespace _4kFilter
             }
 
             foundImagesLock.AcquireWriterLock(1000);
-            using (var reader = new StreamReader(completedIdsFilename))
+            using (var reader = new StreamReader(CompletedIdsFilename))
             {
                 string readLine = reader.ReadLine();
                 while (readLine != null)
@@ -210,7 +235,7 @@ namespace _4kFilter
                 }
             }
 
-            completedIdsFileWriterStream = new StreamWriter(completedIdsFilename, append:true);
+            completedIdsFileWriterStream = new StreamWriter(CompletedIdsFilename, append:true);
             foundImagesLock.ReleaseWriterLock();
             completedIdsFileLock.ReleaseReaderLock();
         }
@@ -272,7 +297,7 @@ namespace _4kFilter
                         foundImages.Add(file.Id);
                         foundImagesLock.ReleaseWriterLock();
 
-                        isInKeyDirectory = shouldFilterExistingFolders && (isInKeyDirectory || categoryDirectories.Contains(file.Id));
+                        isInKeyDirectory = ShouldFilterExistingFolders && (isInKeyDirectory || categoryDirectories.Contains(file.Id));
                         Task subDirectoryTask = new Task(() => FindAllImages(service, file.Id, isInKeyDirectory));
                         queuedThreads++;
                         subDirectoryTask.Start();
@@ -290,7 +315,7 @@ namespace _4kFilter
                         // This last updated time could be used in the future to recategorize older files every time some parameters are changed
                         // However for now, it's mere presence is sufficient for determining if a file has already been processed.
                         DateTime lastUpdatedTime = DateTimeEncoder.DecodeStringAsDateTime(file.AppProperties[lastUpdatedKey]);
-                        if (lastUpdatedTime >= newestVersionTimestamp) continue;
+                        if (lastUpdatedTime >= NewestVersionTimestamp) continue;
                     }
 
                     // Add to queue if it's not already added
@@ -386,7 +411,7 @@ namespace _4kFilter
                 }
             }
 
-            if (shouldRenameIncorrectExtensions)
+            if (ShouldRenameIncorrectExtensions)
             {
                 if (handler.InternalFileType == ImageHandler.FileType.PNG && file.FileExtension != "png")
                 {
@@ -397,6 +422,16 @@ namespace _4kFilter
                 {
                     Console.WriteLine("JPG file found with different extension '" + file.FileExtension + "'... renaming.");
                     newName = ReplaceExtension(file.Name, "jpg");
+                }
+            }
+
+            if (ShouldRecordMetadata && dimensions != null)
+            {
+                long headerPositionInFile = GetLowerByte(missCount) + handler.EndOfMetadataIndex;
+                lock (metadataFileWriterStream)
+                {
+                    metadataFileWriterStream.WriteLine(headerPositionInFile);
+                    metadataFileWriterStream.Flush();
                 }
             }
 
@@ -495,9 +530,9 @@ namespace _4kFilter
             var request = service.Files.Get(fileId);
             var stream = new MemoryStream();
 
-            long lowerByte = attemptNumber == 0 ? 0 : (long)numberOfBytesToRead * ((long)1 << (attemptNumber - 1));
+            long lowerByte = GetLowerByte(attemptNumber);
             // The 10 byte overlap between requests is so that the header isn't split between two requests.
-            long upperByte = (long)numberOfBytesToRead * ((long)1 << attemptNumber) + 10;
+            long upperByte = numberOfBytesToRead * (1L << attemptNumber) + 10L;
 
             // TODO refactor this out (and combine with other version)
             int missedHeaderFailureCount = 0;
@@ -532,6 +567,11 @@ namespace _4kFilter
             }
 
             return stream;
+        }
+
+        private static long GetLowerByte(int attemptNumber)
+        {
+            return attemptNumber == 0 ? 0L : numberOfBytesToRead * (1L << (attemptNumber - 1));
         }
 
         private static int slotTime = 50;
