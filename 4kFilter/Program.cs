@@ -33,13 +33,13 @@ namespace _4kFilter
         private const string DestinationWidescreenRatioFolderName = "Widescreen";
 
         //private static DateTime NewestVersionTimestamp = new DateTime(2018, 3, 19, 1, 10, 0);
-        private static DateTime NewestVersionTimestamp = DateTime.Now;
-        //private static DateTime NewestVersionTimestamp = DateTime.MinValue;
+        //private static DateTime NewestVersionTimestamp = DateTime.Now;
+        private static DateTime NewestVersionTimestamp = DateTime.MinValue;
         private static bool ShouldFilterExistingFolders = false;
         private static bool ShouldRenameIncorrectExtensions = true;
 
         // Null to not report metadata.
-        private static string MetadataFilename = "metadata";
+        private static string MetadataFilename = null;
 
         private const string CompletedIdsFilename = "completedFiles";
         // ------------------------------------------------------------
@@ -162,9 +162,12 @@ namespace _4kFilter
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
-            lock (metadataFileWriterStream)
+            if (metadataFileWriterStream != null)
             {
-                metadataFileWriterStream.Close();
+                lock (metadataFileWriterStream)
+                {
+                    metadataFileWriterStream.Close();
+                }
             }
 
             Console.WriteLine();
@@ -178,9 +181,12 @@ namespace _4kFilter
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
             completedIdsFileLock.ReleaseWriterLock();
-            lock (metadataFileWriterStream)
+            if (metadataFileWriterStream != null)
             {
-                metadataFileWriterStream.Close();
+                lock (metadataFileWriterStream)
+                {
+                    metadataFileWriterStream.Close();
+                }
             }
         }
 
