@@ -9,13 +9,20 @@ namespace _4kFilter
     // NOTE BE VERY CAREFUL EDITING THIS CLASS. THERE ARE A LOT OF THREADING THINGS THAT AREN'T ENFORCED, BUT ARE VERY IMPORTANT
     class ImageProcessingTaskDispatcher
     {
-        private static int maxThreads = 15;
+        private static int maxThreads = 10;
 
         private ReaderWriterLock imageProcessingActionsLock;
         private ReaderWriterLock runningThreadsLock;
         private int _runningThreads;
         // This is a queue and should be enforced inside this class
         private LinkedList<Action> imageProcessingActions;
+        public int IncompleteTasks
+        {
+            get
+            {
+                return ImageCount + RunningThreads;
+            }
+        }
 
         public ManualResetEvent StoppedEvent { get; private set; }
         public int WaitTime { get; set; }

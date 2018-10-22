@@ -29,12 +29,13 @@ namespace _4kFilter
         private const string Destination4kFolderName = "Resolution: 4K";
         private const string DestinationHdFolderName = "Resolution: HD";
         private const string DestinationWqhdFolderName = "Resolution: WQHD";
+        private const string DestinationVerticalFolderName = "Vertical WQHD Screen";
         private const string DestinationPhoneRatioFolderName = "Phone Ratio";
         private const string DestinationWidescreenRatioFolderName = "Widescreen";
 
-        //private static DateTime NewestVersionTimestamp = new DateTime(2018, 3, 19, 1, 10, 0);
+        private static DateTime NewestVersionTimestamp = new DateTime(2018, 5, 10, 0, 0, 0);
         //private static DateTime NewestVersionTimestamp = DateTime.Now;
-        private static DateTime NewestVersionTimestamp = DateTime.MinValue;
+        //private static DateTime NewestVersionTimestamp = DateTime.MinValue;
         private static bool ShouldFilterExistingFolders = false;
         private static bool ShouldRenameIncorrectExtensions = true;
 
@@ -50,7 +51,7 @@ namespace _4kFilter
         private static ISet<string> foundImages;
         private static ManualResetEvent resetEvent;
         private static int queuedThreads = 0;
-        private static int maxConcurrentThreads = 20;
+        private static int maxConcurrentThreads = 10;
         private static Random random = new Random();
         private static ImageProcessingTaskDispatcher imageProcessingTaskManager;
         private static ReaderWriterLock completedIdsFileLock = new ReaderWriterLock();
@@ -74,6 +75,7 @@ namespace _4kFilter
             {
                 new ImageSizeFilter(service, Destination4kFolderName, new Dimensions(3840, 2160), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, DestinationWqhdFolderName, new Dimensions(2560, 1440), Dimensions.MaxDimension),
+                new ImageSizeFilter(service, DestinationVerticalFolderName, new Dimensions(1440, 2560), Dimensions.MaxDimension),
                 new ImageSizeFilter(service, DestinationHdFolderName, new Dimensions(1920, 1200), Dimensions.MaxDimension),
                 new ImageRatioFilter(service, DestinationWidescreenRatioFolderName, 16d/10d, 0.01),
                 new ImageRatioFilter(service, DestinationPhoneRatioFolderName, null, 9d/10d),
@@ -135,11 +137,11 @@ namespace _4kFilter
             resetEvent = new ManualResetEvent(false);
             runningTasks = new SemaphoreSlim(maxConcurrentThreads, maxConcurrentThreads);
 
-            Task rootTask = new Task(() => FindAllImages(service, wallpaperId));
+            Thread rootTask = new Thread(() => FindAllImages(service, wallpaperId));
             queuedThreads++;
             rootTask.Start();
 
-            Task loggerHelper = new Task(AsyncLogger);
+            Thread loggerHelper = new Thread(AsyncLogger);
             loggerHelper.Start();
 
             // Wait for all the logic to finish.
@@ -158,6 +160,7 @@ namespace _4kFilter
                 Console.WriteLine("No new images found");
             }
             loggerRunning = false;
+            loggerHelper.Interrupt();
 
             completedIdsFileLock.AcquireWriterLock(1000);
             completedIdsFileWriterStream.Close();
@@ -169,7 +172,8 @@ namespace _4kFilter
                     metadataFileWriterStream.Close();
                 }
             }
-
+            // Make sure logger is done before finishing up here.
+            loggerHelper.Join();
             Console.WriteLine();
             Console.WriteLine("Done moving files into new folder");
             Console.ReadKey();
@@ -260,9 +264,9 @@ namespace _4kFilter
                 {
                     if (totalImages < 0)
                     {
-                        totalImages = imageProcessingTaskManager.ImageCount;
+                        totalImages = imageProcessingTaskManager.ImageCount + imageProcessingTaskManager.RunningThreads;
                     }
-                    int completedImages = totalImages - imageProcessingTaskManager.ImageCount;
+                    int completedImages = totalImages - imageProcessingTaskManager.IncompleteTasks;
                     double imagesPerSecond = (double)completedImages / (DateTime.Now - lastImageAcquired).TotalSeconds;
                     Console.WriteLine(completedImages + "/" + totalImages + " (" + ((double)completedImages * 100d / (double)(totalImages)).ToString("0.00") + "%) images processed at a rate of " +
                         imagesPerSecond.ToString("0.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
@@ -272,7 +276,20 @@ namespace _4kFilter
                     Console.WriteLine(queuedThreads + " threads queued and " + (maxConcurrentThreads - runningTasks.CurrentCount) + " running and " +
                         imageProcessingTaskManager.ImageCount + " images found");
                 }
-                Thread.Sleep(500);
+                try
+                {
+                    Thread.Sleep(500);
+                }
+                catch (ThreadInterruptedException) {
+                    // Print one final log, if appropriate.
+                    if (totalImages > 0)
+                    {
+                        int completedImages = totalImages;
+                        double imagesPerSecond = (double)completedImages / (DateTime.Now - lastImageAcquired).TotalSeconds;
+                        Console.WriteLine(completedImages + "/" + totalImages + " (" + ((double)completedImages * 100d / (double)(totalImages)).ToString("0.00") + "%) images processed at a rate of " +
+                            imagesPerSecond.ToString("0.000") + " images per second. Threads:" + imageProcessingTaskManager.RunningThreads);
+                    }
+                }
             }
         }
 
