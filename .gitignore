@@ -1,8 +1,9 @@
-﻿################################################################################
-# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
-################################################################################
-
+﻿*.config
+.idea/
+.vs/
 /.vs/4kFilter/v15
-*.config
-/4kFilter/bin/Debug/client_secret.json
+/packages/
+/4kFilter/bin/
+4kFilter/obj/
 /4kFilter/client_secret.json
+*client_secret.json
